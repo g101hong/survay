@@ -52,24 +52,60 @@ function SignalBars({ ok }) {
 function StatusChip({ label, ok }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-mono tracking-wide ${
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-mono tracking-wide whitespace-nowrap shrink-0 ${
         ok ? "bg-[#DCE9E6] text-[#1E4F45]" : "bg-[#F4DEDB] text-[#8C2F27]"
       }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${ok ? "bg-[#2F6F62]" : "bg-[#C1443B]"}`} />
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ok ? "bg-[#2F6F62]" : "bg-[#C1443B]"}`} />
       {label}
     </span>
   );
 }
 
 function PhotoTile({ label, url, tall }) {
+  const [open, setOpen] = useState(false);
+
   if (url) {
     return (
-      <div className={`relative overflow-hidden rounded-md border border-[#D8DEDC] ${tall ? "h-56" : "h-28"}`}>
-        <img src={url} alt={label} className="w-full h-full object-cover" />
-      </div>
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-[#EEF2F1] flex items-center justify-center w-full cursor-zoom-in ${
+            tall ? "h-56" : "h-28"
+          }`}
+        >
+          <img src={url} alt={label} className="w-full h-full object-contain" />
+        </button>
+
+        {open && (
+          <div
+            className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4"
+            onClick={() => setOpen(false)}
+          >
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="absolute top-4 right-4 text-white/80 hover:text-white p-1"
+              aria-label="닫기"
+            >
+              <X size={22} />
+            </button>
+            <img
+              src={url}
+              alt={label}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-full max-h-full object-contain rounded-md"
+            />
+            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 text-white/70 text-[11px] font-mono">
+              {label}
+            </div>
+          </div>
+        )}
+      </>
     );
   }
+
   return (
     <div
       className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-gradient-to-br from-[#EEF2F1] to-[#DCE4E2] flex items-end ${
@@ -764,11 +800,11 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
           <div className="text-[13px] text-[#4A5A5C] mb-2">현장사진</div>
           {photoPreview || existingPhotoUrl ? (
             <div className="relative">
-              <div className="rounded-md overflow-hidden border border-[#D8DEDC] h-52">
+              <div className="rounded-md overflow-hidden border border-[#D8DEDC] bg-[#EEF2F1] h-52 flex items-center justify-center">
                 <img
                   src={photoPreview || existingPhotoUrl}
                   alt="현장조사 사진"
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
                 />
               </div>
               <div className="flex gap-2 mt-2">
