@@ -72,7 +72,7 @@ function PhotoTile({ label, url, tall }) {
           type="button"
           onClick={() => setOpen(true)}
           className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-[#EEF2F1] flex items-center justify-center w-full cursor-zoom-in ${
-            tall ? "h-56" : "h-28"
+            tall ? "h-56" : "h-40"
           }`}
         >
           <img src={url} alt={label} className="w-full h-full object-contain" />
@@ -109,7 +109,7 @@ function PhotoTile({ label, url, tall }) {
   return (
     <div
       className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-gradient-to-br from-[#EEF2F1] to-[#DCE4E2] flex items-end ${
-        tall ? "h-56" : "h-28"
+        tall ? "h-56" : "h-40"
       }`}
     >
       <div
@@ -1219,7 +1219,7 @@ function DashboardScreen({ onBack, onOpenSite }) {
 function BuildMarker() {
   return (
     <div className="fixed bottom-2 right-2 z-[999] text-[10px] font-mono text-[#B9C2C0] bg-white/70 px-1.5 py-0.5 rounded select-none pointer-events-none">
-      build v7
+      build v8
     </div>
   );
 }
