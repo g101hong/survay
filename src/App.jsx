@@ -70,7 +70,10 @@ function PhotoTile({ label, url, tall }) {
       <>
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
           className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-[#EEF2F1] flex items-center justify-center w-full cursor-zoom-in ${
             tall ? "h-56" : "h-40"
           }`}
@@ -81,11 +84,17 @@ function PhotoTile({ label, url, tall }) {
         {open && (
           <div
             className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4"
-            onClick={() => setOpen(false)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
           >
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
               className="absolute top-4 right-4 text-white/80 hover:text-white p-1"
               aria-label="닫기"
             >
@@ -1219,7 +1228,7 @@ function DashboardScreen({ onBack, onOpenSite }) {
 function BuildMarker() {
   return (
     <div className="fixed bottom-2 right-2 z-[999] text-[10px] font-mono text-[#B9C2C0] bg-white/70 px-1.5 py-0.5 rounded select-none pointer-events-none">
-      build v8
+      build v9
     </div>
   );
 }
