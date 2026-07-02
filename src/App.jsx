@@ -164,7 +164,7 @@ function ListScreen({ onSelect }) {
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <DemoBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-6 pt-8 pb-5">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5">
           <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
             <Wifi size={16} strokeWidth={2.5} />
             <span className="text-[11px] font-mono tracking-[0.18em] uppercase">공공 와이파이 현장조사</span>
@@ -174,7 +174,7 @@ function ListScreen({ onSelect }) {
           </h1>
         </div>
 
-        <div className="max-w-5xl mx-auto px-6 pb-4 flex flex-wrap items-center gap-2">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4 flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A8886]" />
             <input
@@ -210,8 +210,47 @@ function ListScreen({ onSelect }) {
       {!error && !sites && <CenteredLoader />}
 
       {!error && sites && (
-        <main className="max-w-5xl mx-auto px-6 py-6">
-          <div className="rounded-lg border border-[#D8DEDC] bg-white overflow-hidden">
+        <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+          {/* 모바일: 카드 목록 (좁은 컬럼에 한글이 세로로 쪼개지는 문제 방지) */}
+          <div className="grid gap-2.5 md:hidden">
+            {rows.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => onSelect(s.id)}
+                className="rounded-lg border border-[#D8DEDC] bg-white p-4 active:bg-[#F3F5F4] transition-colors"
+              >
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <h3 className="text-[16px] font-semibold leading-snug flex items-center gap-1.5 min-w-0">
+                    <MapPin size={14} className="text-[#7A8886] shrink-0" />
+                    <span className="truncate">{s.location}</span>
+                  </h3>
+                  {s.badCount === 0 ? (
+                    <StatusChip label="정상" ok />
+                  ) : (
+                    <StatusChip label={`불량 ${s.badCount}`} ok={false} />
+                  )}
+                </div>
+                <p className="text-[13px] text-[#7A8886] truncate mb-3">{s.address}</p>
+                <div className="flex items-center gap-3 text-[12px] font-mono text-[#4A5A5C] pt-2.5 border-t border-[#EEF1F0]">
+                  <span>#{String(s.id).padStart(3, "0")}</span>
+                  <span className="w-px h-3 bg-[#E7EBEA]" />
+                  <span>{s.gugun}</span>
+                  <span className="w-px h-3 bg-[#E7EBEA]" />
+                  <span>{s.install_year}</span>
+                  <span className="w-px h-3 bg-[#E7EBEA]" />
+                  <span>AP {s.apCount}대</span>
+                </div>
+              </div>
+            ))}
+            {rows.length === 0 && (
+              <div className="text-center text-[#7A8886] text-sm py-16 border border-dashed border-[#D8DEDC] rounded-lg">
+                조건에 맞는 지점이 없습니다. 필터를 조정해 주세요.
+              </div>
+            )}
+          </div>
+
+          {/* 데스크톱: 표 형식 */}
+          <div className="hidden md:block rounded-lg border border-[#D8DEDC] bg-white overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[11px] font-mono uppercase tracking-wide text-[#7A8886] border-b border-[#E7EBEA]">
@@ -219,7 +258,7 @@ function ListScreen({ onSelect }) {
                   <th className="px-4 py-3 font-medium">구군</th>
                   <th className="px-4 py-3 font-medium">설치년도</th>
                   <th className="px-4 py-3 font-medium">위치</th>
-                  <th className="px-4 py-3 font-medium hidden md:table-cell">주소</th>
+                  <th className="px-4 py-3 font-medium">주소</th>
                   <th className="px-4 py-3 font-medium text-right">AP</th>
                   <th className="px-4 py-3 font-medium text-right">상태</th>
                 </tr>
@@ -231,18 +270,20 @@ function ListScreen({ onSelect }) {
                     onClick={() => onSelect(s.id)}
                     className="border-b border-[#EEF1F0] last:border-0 hover:bg-[#F3F5F4] cursor-pointer transition-colors"
                   >
-                    <td className="px-4 py-3 font-mono text-[#4A5A5C]">{String(s.id).padStart(3, "0")}</td>
-                    <td className="px-4 py-3">{s.gugun}</td>
-                    <td className="px-4 py-3 font-mono">{s.install_year}</td>
-                    <td className="px-4 py-3 font-medium flex items-center gap-1.5">
-                      <MapPin size={13} className="text-[#7A8886]" />
-                      {s.location}
+                    <td className="px-4 py-3 font-mono text-[#4A5A5C] whitespace-nowrap">
+                      {String(s.id).padStart(3, "0")}
                     </td>
-                    <td className="px-4 py-3 text-[#7A8886] hidden md:table-cell truncate max-w-[220px]">
-                      {s.address}
+                    <td className="px-4 py-3 whitespace-nowrap">{s.gugun}</td>
+                    <td className="px-4 py-3 font-mono whitespace-nowrap">{s.install_year}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <span className="flex items-center gap-1.5 whitespace-nowrap">
+                        <MapPin size={13} className="text-[#7A8886] shrink-0" />
+                        {s.location}
+                      </span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono">{s.apCount}대</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-[#7A8886] truncate max-w-[220px]">{s.address}</td>
+                    <td className="px-4 py-3 text-right font-mono whitespace-nowrap">{s.apCount}대</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
                       {s.badCount === 0 ? (
                         <StatusChip label="정상" ok />
                       ) : (
