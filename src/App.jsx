@@ -276,8 +276,8 @@ function ListScreen({ onSelect, onDashboard }) {
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <DemoBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5 flex items-start justify-between gap-3">
-          <div>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
             <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
               <Wifi size={16} strokeWidth={2.5} />
               <span className="text-[11px] font-mono tracking-[0.18em] uppercase">공공 와이파이 현장조사</span>
@@ -291,25 +291,26 @@ function ListScreen({ onSelect, onDashboard }) {
             className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors shrink-0"
           >
             <LayoutDashboard size={14} />
-            대시보드
+            <span className="hidden sm:inline">대시보드</span>
           </button>
         </div>
 
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A8886]" />
-              <input
-                value={queryInput}
-                onChange={(e) => setQueryInput(e.target.value)}
-                placeholder="위치, 주소, AP번호로 검색"
-                className="w-full pl-9 pr-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62] focus:ring-2 focus:ring-[#2F6F62]/15"
-              />
-            </div>
+          <div className="relative mb-2">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A8886]" />
+            <input
+              value={queryInput}
+              onChange={(e) => setQueryInput(e.target.value)}
+              placeholder="위치, 주소, AP번호로 검색"
+              className="w-full pl-9 pr-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62] focus:ring-2 focus:ring-[#2F6F62]/15"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
             <select
               value={gugun}
               onChange={(e) => setGugun(e.target.value)}
-              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+              className="w-full sm:w-auto px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
             >
               {guguns.map((g) => (
                 <option key={g}>{g}</option>
@@ -318,7 +319,7 @@ function ListScreen({ onSelect, onDashboard }) {
             <select
               value={year}
               onChange={(e) => setYear(e.target.value)}
-              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+              className="w-full sm:w-auto px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
             >
               {years.map((y) => (
                 <option key={y}>{y}</option>
@@ -327,7 +328,7 @@ function ListScreen({ onSelect, onDashboard }) {
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
-              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+              className="w-full sm:w-auto px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
             >
               {["전체", "정상", "점검필요"].map((s) => (
                 <option key={s}>{s}</option>
@@ -336,7 +337,7 @@ function ListScreen({ onSelect, onDashboard }) {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+              className="w-full sm:w-auto px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
             >
               {SORT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -344,7 +345,7 @@ function ListScreen({ onSelect, onDashboard }) {
                 </option>
               ))}
             </select>
-            <span className="text-[12px] font-mono text-[#7A8886] ml-auto whitespace-nowrap">
+            <span className="col-span-2 sm:col-span-1 text-[12px] font-mono text-[#7A8886] sm:ml-auto whitespace-nowrap">
               {rows.length}건
             </span>
           </div>
