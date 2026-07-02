@@ -384,7 +384,7 @@ function ListScreen({ onSelect, onDashboard }) {
               <div
                 key={s.id}
                 onClick={() => onSelect(s.id)}
-                className="rounded-lg border border-[#D8DEDC] bg-white p-4 active:bg-[#F3F5F4] transition-colors"
+                className="rounded-lg border border-[#D8DEDC] bg-white p-4 overflow-hidden active:bg-[#F3F5F4] transition-colors"
               >
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <h3 className="text-[16px] font-semibold leading-snug flex items-center gap-1.5 min-w-0">
@@ -1216,11 +1216,21 @@ function DashboardScreen({ onBack, onOpenSite }) {
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
+function BuildMarker() {
+  return (
+    <div className="fixed bottom-2 right-2 z-[999] text-[10px] font-mono text-[#B9C2C0] bg-white/70 px-1.5 py-0.5 rounded select-none pointer-events-none">
+      build v7
+    </div>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState({ name: "list" });
 
+  let content;
+
   if (page.name === "survey") {
-    return (
+    content = (
       <SurveyScreen
         site={page.site}
         ap={page.ap}
@@ -1228,31 +1238,34 @@ export default function App() {
         onCancel={() => setPage({ name: "detail", siteId: page.site.id })}
       />
     );
-  }
-
-  if (page.name === "detail") {
-    return (
+  } else if (page.name === "detail") {
+    content = (
       <DetailScreen
         siteId={page.siteId}
         onBack={() => setPage({ name: "list" })}
         onSurvey={(site, ap) => setPage({ name: "survey", site, ap })}
       />
     );
-  }
-
-  if (page.name === "dashboard") {
-    return (
+  } else if (page.name === "dashboard") {
+    content = (
       <DashboardScreen
         onBack={() => setPage({ name: "list" })}
         onOpenSite={(siteId) => setPage({ name: "detail", siteId })}
       />
     );
+  } else {
+    content = (
+      <ListScreen
+        onSelect={(siteId) => setPage({ name: "detail", siteId })}
+        onDashboard={() => setPage({ name: "dashboard" })}
+      />
+    );
   }
 
   return (
-    <ListScreen
-      onSelect={(siteId) => setPage({ name: "detail", siteId })}
-      onDashboard={() => setPage({ name: "dashboard" })}
-    />
+    <>
+      {content}
+      <BuildMarker />
+    </>
   );
 }
