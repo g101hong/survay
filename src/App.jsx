@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
+  ChevronRight,
   Search,
   MapPin,
   Camera,
@@ -13,11 +14,15 @@ import {
   RotateCcw,
   Check,
   X,
+  LayoutDashboard,
+  History,
+  Clock,
 } from "lucide-react";
 import {
   fetchSites,
   fetchApDetailsBySite,
   fetchAllApDetails,
+  fetchAllSurveyLogs,
   resolvePhotoUrl,
   submitSurvey,
 } from "./api";
@@ -122,7 +127,7 @@ function ErrorMessage({ message }) {
 /* List screen (화면 A)                                                */
 /* ------------------------------------------------------------------ */
 
-function ListScreen({ onSelect }) {
+function ListScreen({ onSelect, onDashboard }) {
   const [sites, setSites] = useState(null);
   const [apSummary, setApSummary] = useState([]);
   const [error, setError] = useState(null);
@@ -174,14 +179,23 @@ function ListScreen({ onSelect }) {
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <DemoBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5">
-          <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
-            <Wifi size={16} strokeWidth={2.5} />
-            <span className="text-[11px] font-mono tracking-[0.18em] uppercase">공공 와이파이 현장조사</span>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
+              <Wifi size={16} strokeWidth={2.5} />
+              <span className="text-[11px] font-mono tracking-[0.18em] uppercase">공공 와이파이 현장조사</span>
+            </div>
+            <h1 className="text-[28px] leading-tight font-semibold tracking-tight font-display">
+              설치 현황 조회
+            </h1>
           </div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight font-display">
-            설치 현황 조회
-          </h1>
+          <button
+            onClick={onDashboard}
+            className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors shrink-0"
+          >
+            <LayoutDashboard size={14} />
+            대시보드
+          </button>
         </div>
 
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4 flex flex-wrap items-center gap-2">
@@ -734,6 +748,322 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Dashboard (화면 D)                                                  */
+/* ------------------------------------------------------------------ */
+
+function StatCard({ label, value, tone }) {
+  const toneClass =
+    tone === "good" ? "text-[#2F6F62]" : tone === "bad" ? "text-[#C1443B]" : "text-[#1C2B2C]";
+  return (
+    <div className="rounded-lg border border-[#D8DEDC] bg-white p-4">
+      <div className="text-[12px] text-[#7A8886] mb-1.5">{label}</div>
+      <div className={`text-[26px] font-semibold font-mono ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function BarRow({ label, count, total, badCount, unit }) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <div className="py-2.5">
+      <div className="flex items-center justify-between text-[13px] mb-1.5">
+        <span className="font-medium">{label}</span>
+        <span className="font-mono text-[#7A8886]">
+          {count}
+          {unit} {badCount > 0 && <span className="text-[#C1443B]">· 불량 {badCount}</span>}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-[#EEF1F0] overflow-hidden">
+        <div className="h-full bg-[#2F6F62] rounded-full" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function computeHistoryFlags(logs) {
+  const byAp = {};
+  for (const log of logs) {
+    (byAp[log.ap_id] ??= []).push(log);
+  }
+  const flags = [];
+  for (const apId of Object.keys(byAp)) {
+    const sorted = byAp[apId].slice().sort((a, b) => a.survey_date.localeCompare(b.survey_date));
+    let streak = 0;
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const bad = sorted[i].device_status === "불량" || sorted[i].network_status === "불량";
+      if (bad) streak++;
+      else break;
+    }
+    const last = sorted[sorted.length - 1];
+    const prev = sorted[sorted.length - 2];
+    const lastBad = last.device_status === "불량" || last.network_status === "불량";
+    const prevOk = prev && prev.device_status === "정상" && prev.network_status === "정상";
+
+    if (streak >= 2) {
+      flags.push({ apId: Number(apId), type: "repeated", streak, lastDate: last.survey_date });
+    } else if (prevOk && lastBad) {
+      flags.push({ apId: Number(apId), type: "worsened", lastDate: last.survey_date });
+    }
+  }
+  return flags.sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+}
+
+function DashboardScreen({ onBack, onOpenSite }) {
+  const [sites, setSites] = useState(null);
+  const [aps, setAps] = useState(null);
+  const [logs, setLogs] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchSites(), fetchAllApDetails(), fetchAllSurveyLogs()])
+      .then(([siteData, apData, logData]) => {
+        if (cancelled) return;
+        setSites(siteData);
+        setAps(apData);
+        setLogs(logData);
+      })
+      .catch((err) => !cancelled && setError(err.message ?? String(err)));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const siteById = useMemo(() => Object.fromEntries((sites ?? []).map((s) => [s.id, s])), [sites]);
+
+  const totals = useMemo(() => {
+    if (!aps) return null;
+    const bad = aps.filter((a) => a.device_status === "불량" || a.network_status === "불량");
+    return { siteCount: sites?.length ?? 0, apCount: aps.length, badCount: bad.length, okCount: aps.length - bad.length };
+  }, [aps, sites]);
+
+  const byGugun = useMemo(() => {
+    if (!sites || !aps) return [];
+    const map = {};
+    for (const s of sites) {
+      map[s.gugun] ??= { label: s.gugun, count: 0, badCount: 0 };
+    }
+    for (const a of aps) {
+      const s = siteById[a.site_id];
+      if (!s) continue;
+      map[s.gugun].count += 1;
+      if (a.device_status === "불량" || a.network_status === "불량") map[s.gugun].badCount += 1;
+    }
+    return Object.values(map).sort((a, b) => b.count - a.count);
+  }, [sites, aps, siteById]);
+
+  const byYear = useMemo(() => {
+    if (!sites || !aps) return [];
+    const map = {};
+    for (const s of sites) {
+      map[s.install_year] ??= { label: String(s.install_year), count: 0, badCount: 0 };
+    }
+    for (const a of aps) {
+      const s = siteById[a.site_id];
+      if (!s) continue;
+      map[s.install_year].count += 1;
+      if (a.device_status === "불량" || a.network_status === "불량") map[s.install_year].badCount += 1;
+    }
+    return Object.values(map).sort((a, b) => a.label.localeCompare(b.label));
+  }, [sites, aps, siteById]);
+
+  const badAps = useMemo(() => {
+    if (!aps) return [];
+    return aps
+      .filter((a) => a.device_status === "불량" || a.network_status === "불량")
+      .map((a) => ({ ...a, site: siteById[a.site_id] }))
+      .sort((a, b) => (b.survey_date ?? "").localeCompare(a.survey_date ?? ""));
+  }, [aps, siteById]);
+
+  const uncheckedAps = useMemo(() => {
+    if (!aps) return [];
+    const missing = aps.filter((a) => !a.survey_date);
+    const old = aps
+      .filter((a) => a.survey_date)
+      .sort((a, b) => a.survey_date.localeCompare(b.survey_date));
+    return [...missing, ...old].slice(0, 6).map((a) => ({ ...a, site: siteById[a.site_id] }));
+  }, [aps, siteById]);
+
+  const historyFlags = useMemo(() => {
+    if (!logs || !aps) return [];
+    return computeHistoryFlags(logs)
+      .map((f) => {
+        const ap = aps.find((a) => a.id === f.apId);
+        if (!ap) return null;
+        return { ...f, ap, site: siteById[ap.site_id] };
+      })
+      .filter(Boolean);
+  }, [logs, aps, siteById]);
+
+  const loading = !sites || !aps || !logs;
+
+  return (
+    <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
+      <DemoBanner />
+      <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 pb-4">
+          <button
+            onClick={onBack}
+            className="inline-flex items-center gap-1 text-[13px] text-[#4A5A5C] hover:text-[#1C2B2C] transition-colors mb-3"
+          >
+            <ChevronLeft size={15} /> 목록으로
+          </button>
+          <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
+            <LayoutDashboard size={16} strokeWidth={2.5} />
+            <span className="text-[11px] font-mono tracking-[0.18em] uppercase">현황 요약</span>
+          </div>
+          <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
+        </div>
+      </header>
+
+      {error && <ErrorMessage message={error} />}
+      {!error && loading && <CenteredLoader />}
+
+      {!error && !loading && (
+        <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+          {/* 요약 카드 */}
+          <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard label="설치 지점" value={totals.siteCount} />
+            <StatCard label="전체 AP" value={totals.apCount} />
+            <StatCard label="정상 AP" value={totals.okCount} tone="good" />
+            <StatCard label="점검 필요 AP" value={totals.badCount} tone="bad" />
+          </section>
+
+          {/* 구군별 / 연도별 현황 */}
+          <section className="grid md:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-[#D8DEDC] bg-white p-4">
+              <h2 className="text-[14px] font-semibold mb-1">구군별 설치 현황</h2>
+              <div className="divide-y divide-[#EEF1F0]">
+                {byGugun.map((g) => (
+                  <BarRow key={g.label} label={g.label} count={g.count} total={totals.apCount} badCount={g.badCount} unit="대" />
+                ))}
+              </div>
+            </div>
+            <div className="rounded-lg border border-[#D8DEDC] bg-white p-4">
+              <h2 className="text-[14px] font-semibold mb-1">설치년도별 현황</h2>
+              <div className="divide-y divide-[#EEF1F0]">
+                {byYear.map((y) => (
+                  <BarRow key={y.label} label={y.label} count={y.count} total={totals.apCount} badCount={y.badCount} unit="대" />
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* 불량 기기 현황 */}
+          <section className="rounded-lg border border-[#D8DEDC] bg-white overflow-hidden">
+            <div className="flex items-center justify-between px-4 pt-4 pb-2">
+              <h2 className="text-[14px] font-semibold flex items-center gap-1.5">
+                <AlertTriangle size={14} className="text-[#C1443B]" />
+                불량 기기 현황
+              </h2>
+              <span className="text-[12px] font-mono text-[#7A8886]">{badAps.length}건</span>
+            </div>
+            {badAps.length === 0 ? (
+              <p className="px-4 pb-4 text-[13px] text-[#7A8886]">불량으로 등록된 AP가 없습니다.</p>
+            ) : (
+              <div className="divide-y divide-[#EEF1F0]">
+                {badAps.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => onOpenSite(a.site_id)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[#F3F5F4] transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium truncate">
+                        {a.site?.location} · <span className="font-mono">{a.ap_no}</span>
+                      </div>
+                      <div className="text-[12px] text-[#7A8886] truncate">{a.install_point}</div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <StatusChip label={`기기 ${a.device_status}`} ok={a.device_status === "정상"} />
+                      <StatusChip label={`통신 ${a.network_status}`} ok={a.network_status === "정상"} />
+                      <ChevronRight size={14} className="text-[#7A8886]" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="grid md:grid-cols-2 gap-4">
+            {/* 미점검 지점 */}
+            <div className="rounded-lg border border-[#D8DEDC] bg-white overflow-hidden">
+              <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                <h2 className="text-[14px] font-semibold flex items-center gap-1.5">
+                  <Clock size={14} className="text-[#7A8886]" />
+                  최근 미점검 지점
+                </h2>
+              </div>
+              {uncheckedAps.length === 0 ? (
+                <p className="px-4 pb-4 text-[13px] text-[#7A8886]">모든 AP가 최근 점검되었습니다.</p>
+              ) : (
+                <div className="divide-y divide-[#EEF1F0]">
+                  {uncheckedAps.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => onOpenSite(a.site_id)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[#F3F5F4] transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-medium truncate">
+                          {a.site?.location} · <span className="font-mono">{a.ap_no}</span>
+                        </div>
+                      </div>
+                      <span className="text-[12px] font-mono text-[#C1443B] shrink-0">
+                        {a.survey_date || "미조사"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 이력 분석 */}
+            <div className="rounded-lg border border-[#D8DEDC] bg-white overflow-hidden">
+              <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                <h2 className="text-[14px] font-semibold flex items-center gap-1.5">
+                  <History size={14} className="text-[#7A8886]" />
+                  상태 변화 이력
+                </h2>
+              </div>
+              {historyFlags.length === 0 ? (
+                <p className="px-4 pb-4 text-[13px] text-[#7A8886]">
+                  반복 불량이나 상태 악화가 감지된 AP가 없습니다.
+                </p>
+              ) : (
+                <div className="divide-y divide-[#EEF1F0]">
+                  {historyFlags.map((f) => (
+                    <button
+                      key={f.apId}
+                      onClick={() => onOpenSite(f.ap.site_id)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-[#F3F5F4] transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-medium truncate">
+                          {f.site?.location} · <span className="font-mono">{f.ap.ap_no}</span>
+                        </div>
+                        <div className="text-[12px] text-[#7A8886]">{f.lastDate} 기준</div>
+                      </div>
+                      <span
+                        className={`text-[11px] font-mono px-2 py-0.5 rounded-full shrink-0 ${
+                          f.type === "repeated" ? "bg-[#F4DEDB] text-[#8C2F27]" : "bg-[#FBF2D9] text-[#6B5313]"
+                        }`}
+                      >
+                        {f.type === "repeated" ? `반복 불량 ${f.streak}회` : "정상 → 불량"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </main>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -761,5 +1091,19 @@ export default function App() {
     );
   }
 
-  return <ListScreen onSelect={(siteId) => setPage({ name: "detail", siteId })} />;
+  if (page.name === "dashboard") {
+    return (
+      <DashboardScreen
+        onBack={() => setPage({ name: "list" })}
+        onOpenSite={(siteId) => setPage({ name: "detail", siteId })}
+      />
+    );
+  }
+
+  return (
+    <ListScreen
+      onSelect={(siteId) => setPage({ name: "detail", siteId })}
+      onDashboard={() => setPage({ name: "dashboard" })}
+    />
+  );
 }

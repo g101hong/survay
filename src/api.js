@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
-import { MOCK_SITES, MOCK_AP_DETAIL } from "./mockData";
+import { MOCK_SITES, MOCK_AP_DETAIL, MOCK_SURVEY_LOG } from "./mockData";
 
 /**
  * 전체 지점 목록(상세현황)을 가져옵니다.
@@ -43,7 +43,7 @@ export async function fetchApDetailsBySite(siteId) {
 }
 
 /**
- * 전체 AP 목록을 한 번에 가져옵니다 (목록 화면에서 지점별 대수·상태 요약용).
+ * 전체 AP 목록을 한 번에 가져옵니다 (목록/대시보드 화면에서 지점별 대수·상태 요약용).
  */
 export async function fetchAllApDetails() {
   if (!isSupabaseConfigured) {
@@ -53,7 +53,26 @@ export async function fetchAllApDetails() {
 
   const { data, error } = await supabase
     .from("ap_detail")
-    .select("id, site_id, device_status, network_status");
+    .select("id, site_id, ap_no, in_out, install_point, device_status, network_status, survey_date");
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * 전체 조사이력(survey_log)을 가져옵니다.
+ * 대시보드의 "반복 불량 / 상태 악화" 분석에 사용됩니다.
+ */
+export async function fetchAllSurveyLogs() {
+  if (!isSupabaseConfigured) {
+    await delay(150);
+    return MOCK_SURVEY_LOG;
+  }
+
+  const { data, error } = await supabase
+    .from("survey_log")
+    .select("id, ap_id, device_status, network_status, survey_date, remark")
+    .order("survey_date", { ascending: true });
 
   if (error) throw error;
   return data;
