@@ -97,8 +97,8 @@ function DemoBanner() {
     <div className="bg-[#FBF2D9] border-b border-[#EBD9A0] text-[#6B5313] text-[12px]">
       <div className="max-w-5xl mx-auto px-6 py-2 flex items-center gap-2">
         <AlertTriangle size={13} />
-        데모 모드입니다. Supabase 환경변수(VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)가 설정되면
-        실제 DB 데이터로 자동 전환됩니다.
+        데모 모드입니다. Supabase 환경변수가 설정되면 실제 DB 데이터로 자동 전환됩니다.
+        환경변수를 이미 넣었는데도 이 배너가 보인다면 개발자도구(F12) Console에서 원인을 확인하세요.
       </div>
     </div>
   );
@@ -134,7 +134,16 @@ function ListScreen({ onSelect, onDashboard }) {
 
   const [gugun, setGugun] = useState("전체");
   const [year, setYear] = useState("전체");
+  const [status, setStatus] = useState("전체");
+  const [sortBy, setSortBy] = useState("id");
+  const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
+
+  // 검색어 디바운스 (타이핑 중 매 입력마다 재계산하지 않도록 250ms 지연)
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(queryInput.trim()), 250);
+    return () => clearTimeout(t);
+  }, [queryInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,21 +168,73 @@ function ListScreen({ onSelect, onDashboard }) {
     [sites]
   );
 
+  const SORT_OPTIONS = [
+    { value: "id", label: "관리번호순" },
+    { value: "yearDesc", label: "설치년도 최신순" },
+    { value: "yearAsc", label: "설치년도 오래된순" },
+    { value: "badDesc", label: "불량 많은순" },
+    { value: "location", label: "위치명순" },
+  ];
+
   const rows = useMemo(() => {
     if (!sites) return [];
-    return sites
-      .filter((s) => {
-        if (gugun !== "전체" && s.gugun !== gugun) return false;
-        if (year !== "전체" && s.install_year !== Number(year)) return false;
-        if (query && !`${s.location} ${s.address}`.includes(query)) return false;
-        return true;
-      })
-      .map((s) => {
-        const aps = apSummary.filter((a) => a.site_id === s.id);
-        const badCount = aps.filter((a) => a.device_status === "불량" || a.network_status === "불량").length;
-        return { ...s, apCount: aps.length, badCount };
-      });
-  }, [sites, apSummary, gugun, year, query]);
+    const q = query.toLowerCase();
+
+    const withAps = sites.map((s) => {
+      const aps = apSummary.filter((a) => a.site_id === s.id);
+      const badCount = aps.filter((a) => a.device_status === "불량" || a.network_status === "불량").length;
+      return { ...s, aps, apCount: aps.length, badCount };
+    });
+
+    const filtered = withAps.filter((s) => {
+      if (gugun !== "전체" && s.gugun !== gugun) return false;
+      if (year !== "전체" && s.install_year !== Number(year)) return false;
+      if (status === "정상" && s.badCount > 0) return false;
+      if (status === "점검필요" && s.badCount === 0) return false;
+      if (q) {
+        const inSite = `${s.location} ${s.address} ${s.gugun}`.toLowerCase().includes(q);
+        const inAp = s.aps.some((a) =>
+          `${a.ap_no} ${a.install_point}`.toLowerCase().includes(q)
+        );
+        if (!inSite && !inAp) return false;
+      }
+      return true;
+    });
+
+    const sorted = filtered.slice().sort((a, b) => {
+      switch (sortBy) {
+        case "yearDesc":
+          return b.install_year - a.install_year;
+        case "yearAsc":
+          return a.install_year - b.install_year;
+        case "badDesc":
+          return b.badCount - a.badCount || a.id - b.id;
+        case "location":
+          return a.location.localeCompare(b.location, "ko");
+        default:
+          return a.id - b.id;
+      }
+    });
+
+    return sorted;
+  }, [sites, apSummary, gugun, year, status, sortBy, query]);
+
+  const activeFilters = useMemo(() => {
+    const chips = [];
+    if (query) chips.push({ key: "query", label: `"${query}"`, clear: () => setQueryInput("") });
+    if (gugun !== "전체") chips.push({ key: "gugun", label: gugun, clear: () => setGugun("전체") });
+    if (year !== "전체") chips.push({ key: "year", label: `${year}년`, clear: () => setYear("전체") });
+    if (status !== "전체") chips.push({ key: "status", label: status, clear: () => setStatus("전체") });
+    return chips;
+  }, [query, gugun, year, status]);
+
+  function resetFilters() {
+    setQueryInput("");
+    setGugun("전체");
+    setYear("전체");
+    setStatus("전체");
+    setSortBy("id");
+  }
 
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
@@ -198,35 +259,80 @@ function ListScreen({ onSelect, onDashboard }) {
           </button>
         </div>
 
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A8886]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="위치 또는 주소 검색"
-              className="w-full pl-9 pr-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62] focus:ring-2 focus:ring-[#2F6F62]/15"
-            />
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A8886]" />
+              <input
+                value={queryInput}
+                onChange={(e) => setQueryInput(e.target.value)}
+                placeholder="위치, 주소, AP번호로 검색"
+                className="w-full pl-9 pr-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62] focus:ring-2 focus:ring-[#2F6F62]/15"
+              />
+            </div>
+            <select
+              value={gugun}
+              onChange={(e) => setGugun(e.target.value)}
+              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+            >
+              {guguns.map((g) => (
+                <option key={g}>{g}</option>
+              ))}
+            </select>
+            <select
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+            >
+              {years.map((y) => (
+                <option key={y}>{y}</option>
+              ))}
+            </select>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+            >
+              {["전체", "정상", "점검필요"].map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-[12px] font-mono text-[#7A8886] ml-auto whitespace-nowrap">
+              {rows.length}건
+            </span>
           </div>
-          <select
-            value={gugun}
-            onChange={(e) => setGugun(e.target.value)}
-            className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
-          >
-            {guguns.map((g) => (
-              <option key={g}>{g}</option>
-            ))}
-          </select>
-          <select
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className="px-3 py-2 rounded-md border border-[#D8DEDC] bg-white text-sm outline-none focus:border-[#2F6F62]"
-          >
-            {years.map((y) => (
-              <option key={y}>{y}</option>
-            ))}
-          </select>
-          <span className="text-[12px] font-mono text-[#7A8886] ml-auto">{rows.length}건</span>
+
+          {activeFilters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+              {activeFilters.map((f) => (
+                <button
+                  key={f.key}
+                  onClick={f.clear}
+                  className="inline-flex items-center gap-1 rounded-full bg-[#DCE9E6] text-[#1E4F45] text-[12px] pl-2.5 pr-1.5 py-1 hover:bg-[#CBE0DB] transition-colors"
+                >
+                  {f.label}
+                  <X size={12} />
+                </button>
+              ))}
+              <button
+                onClick={resetFilters}
+                className="text-[12px] text-[#7A8886] hover:text-[#1C2B2C] underline underline-offset-2 ml-1"
+              >
+                필터 초기화
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -268,7 +374,10 @@ function ListScreen({ onSelect, onDashboard }) {
             ))}
             {rows.length === 0 && (
               <div className="text-center text-[#7A8886] text-sm py-16 border border-dashed border-[#D8DEDC] rounded-lg">
-                조건에 맞는 지점이 없습니다. 필터를 조정해 주세요.
+                <p>조건에 맞는 지점이 없습니다.</p>
+                <button onClick={resetFilters} className="mt-2 text-[#2F6F62] underline underline-offset-2">
+                  필터 초기화
+                </button>
               </div>
             )}
           </div>
@@ -319,7 +428,10 @@ function ListScreen({ onSelect, onDashboard }) {
                 {rows.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-4 py-10 text-center text-[#7A8886] text-sm">
-                      조건에 맞는 지점이 없습니다. 필터를 조정해 주세요.
+                      조건에 맞는 지점이 없습니다.{" "}
+                      <button onClick={resetFilters} className="text-[#2F6F62] underline underline-offset-2">
+                        필터 초기화
+                      </button>
                     </td>
                   </tr>
                 )}
