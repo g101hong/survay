@@ -121,7 +121,7 @@ function PhotoTile({ label, url, tall }) {
       />
       <div className="relative z-10 flex items-center gap-1.5 px-2.5 py-2 text-[#4A5A5C]">
         <Camera size={14} strokeWidth={2} />
-        <span className="text-[11px] font-mono truncate">{label}</span>
+        <span className="text-[11px] font-mono truncate min-w-0">{label}</span>
       </div>
     </div>
   );
@@ -389,7 +389,7 @@ function ListScreen({ onSelect, onDashboard }) {
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <h3 className="text-[16px] font-semibold leading-snug flex items-center gap-1.5 min-w-0">
                     <MapPin size={14} className="text-[#7A8886] shrink-0" />
-                    <span className="truncate">{s.location}</span>
+                    <span className="truncate min-w-0">{s.location}</span>
                   </h3>
                   {s.badCount === 0 ? (
                     <StatusChip label="정상" ok />
