@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   Search,
@@ -9,8 +9,18 @@ import {
   TreePine,
   Loader2,
   AlertTriangle,
+  ClipboardCheck,
+  RotateCcw,
+  Check,
+  X,
 } from "lucide-react";
-import { fetchSites, fetchApDetailsBySite, fetchAllApDetails, resolvePhotoUrl } from "./api";
+import {
+  fetchSites,
+  fetchApDetailsBySite,
+  fetchAllApDetails,
+  resolvePhotoUrl,
+  submitSurvey,
+} from "./api";
 import { isSupabaseConfigured } from "./supabaseClient";
 
 /* ------------------------------------------------------------------ */
@@ -312,7 +322,7 @@ function ListScreen({ onSelect }) {
 /* Detail screen (화면 B)                                              */
 /* ------------------------------------------------------------------ */
 
-function DetailScreen({ siteId, onBack }) {
+function DetailScreen({ siteId, onBack, onSurvey }) {
   const [site, setSite] = useState(null);
   const [aps, setAps] = useState(null);
   const [error, setError] = useState(null);
@@ -449,15 +459,34 @@ function DetailScreen({ siteId, onBack }) {
                           label={`${site.location}_${ap.ap_no.slice(-2)}.jpg`}
                           url={resolvePhotoUrl("ap-photos", ap.photo_path)}
                         />
+                        {ap.survey_photo_path && (
+                          <div>
+                            <div className="text-[11px] text-[#7A8886] mb-1.5">최근 조사 사진</div>
+                            <PhotoTile
+                              label="현장조사 사진"
+                              url={resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path)}
+                            />
+                          </div>
+                        )}
                         <div className="text-[12px] text-[#7A8886] flex justify-between">
                           <span>최근 조사일</span>
-                          <span className="font-mono text-[#1C2B2C]">{ap.survey_date}</span>
+                          <span className="font-mono text-[#1C2B2C]">{ap.survey_date || "조사 이력 없음"}</span>
                         </div>
                         {ap.remark && (
                           <div className="text-[12px] bg-[#F3F5F4] rounded-md p-2.5 text-[#4A5A5C]">
                             {ap.remark}
                           </div>
                         )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSurvey(site, ap);
+                          }}
+                          className="w-full inline-flex items-center justify-center gap-1.5 rounded-md bg-[#2F6F62] text-white text-[13px] font-medium py-2.5 hover:bg-[#28594E] transition-colors"
+                        >
+                          <ClipboardCheck size={14} />
+                          현장조사 입력
+                        </button>
                       </div>
                     )}
                   </div>
@@ -472,15 +501,265 @@ function DetailScreen({ siteId, onBack }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Survey input screen (화면 C) — mobile-first                         */
+/* ------------------------------------------------------------------ */
+
+function ToggleField({ label, value, onChange }) {
+  return (
+    <div>
+      <div className="text-[13px] text-[#4A5A5C] mb-2">{label}</div>
+      <div className="grid grid-cols-2 gap-2">
+        {["정상", "불량"].map((opt) => {
+          const active = value === opt;
+          const isBad = opt === "불량";
+          return (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => onChange(opt)}
+              className={`py-3 rounded-md text-[14px] font-medium border transition-colors flex items-center justify-center gap-1.5 ${
+                active
+                  ? isBad
+                    ? "bg-[#C1443B] border-[#C1443B] text-white"
+                    : "bg-[#2F6F62] border-[#2F6F62] text-white"
+                  : "bg-white border-[#D8DEDC] text-[#4A5A5C]"
+              }`}
+            >
+              {active && <Check size={14} />}
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SurveyScreen({ site, ap, onDone, onCancel }) {
+  const [deviceStatus, setDeviceStatus] = useState(ap.device_status || "정상");
+  const [networkStatus, setNetworkStatus] = useState(ap.network_status || "정상");
+  const [remark, setRemark] = useState(ap.remark || "");
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const existingPhotoUrl = resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path);
+
+  function handlePickPhoto(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoPreview(URL.createObjectURL(file));
+  }
+
+  function clearPhoto() {
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setError(null);
+    try {
+      await submitSurvey({
+        apId: ap.id,
+        apNo: ap.ap_no,
+        location: site.location,
+        deviceStatus,
+        networkStatus,
+        remark,
+        photoFile,
+      });
+      setDone(true);
+      setTimeout(() => onDone(), 900);
+    } catch (err) {
+      setError(err.message ?? String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="min-h-full bg-[#F3F5F4] flex items-center justify-center px-6">
+        <div className="text-center">
+          <div className="w-12 h-12 rounded-full bg-[#DCE9E6] text-[#2F6F62] flex items-center justify-center mx-auto mb-3">
+            <Check size={22} />
+          </div>
+          <p className="text-[15px] font-medium text-[#1C2B2C]">조사 결과가 저장됐어요</p>
+          <p className="text-[13px] text-[#7A8886] mt-1">지점 화면으로 돌아갑니다...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
+      <DemoBanner />
+      <header className="border-b border-[#D8DEDC] bg-white sticky top-0 z-10">
+        <div className="max-w-lg mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="inline-flex items-center gap-1 text-[13px] text-[#4A5A5C] hover:text-[#1C2B2C] transition-colors disabled:opacity-40"
+          >
+            <ChevronLeft size={15} /> 취소
+          </button>
+          <span className="text-[11px] font-mono uppercase tracking-[0.14em] text-[#7A8886]">현장조사 입력</span>
+        </div>
+      </header>
+
+      <main className="max-w-lg mx-auto px-4 sm:px-6 py-6 space-y-6 pb-28">
+        <div className="rounded-lg border border-[#D8DEDC] bg-white p-4">
+          <div className="text-[11px] font-mono uppercase tracking-[0.14em] text-[#7A8886] mb-1.5">
+            {site.location}
+          </div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-mono text-[15px] font-semibold">{ap.ap_no}</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-[#7A8886] border border-[#E7EBEA] rounded px-1.5 py-0.5">
+              {ap.in_out === "실내" ? <Home size={11} /> : <TreePine size={11} />}
+              {ap.in_out}
+            </span>
+          </div>
+          <div className="text-[13px] text-[#4A5A5C] flex items-center gap-1.5">
+            <MapPin size={12} className="text-[#7A8886]" />
+            {ap.install_point}
+          </div>
+        </div>
+
+        <ToggleField label="기기상태" value={deviceStatus} onChange={setDeviceStatus} />
+        <ToggleField label="통신상태" value={networkStatus} onChange={setNetworkStatus} />
+
+        <div>
+          <div className="text-[13px] text-[#4A5A5C] mb-2">현장사진</div>
+          {photoPreview || existingPhotoUrl ? (
+            <div className="relative">
+              <div className="rounded-md overflow-hidden border border-[#D8DEDC] h-52">
+                <img
+                  src={photoPreview || existingPhotoUrl}
+                  alt="현장조사 사진"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="flex gap-2 mt-2">
+                <label className="flex-1 text-center py-2 rounded-md border border-[#D8DEDC] bg-white text-[13px] text-[#4A5A5C] cursor-pointer">
+                  다시 촬영
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePickPhoto}
+                    className="hidden"
+                  />
+                </label>
+                {photoPreview && (
+                  <button
+                    type="button"
+                    onClick={clearPhoto}
+                    className="px-3 rounded-md border border-[#D8DEDC] bg-white text-[#7A8886]"
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <label className="flex flex-col items-center justify-center gap-2 h-40 rounded-md border-2 border-dashed border-[#D8DEDC] bg-white text-[#7A8886] cursor-pointer">
+              <Camera size={22} />
+              <span className="text-[13px]">탭하여 촬영 또는 사진 선택</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePickPhoto}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[13px] text-[#4A5A5C] mb-2">비고</div>
+          <textarea
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            rows={3}
+            placeholder="특이사항을 입력하세요 (예: 외함 파손, 재조사 필요 등)"
+            className="w-full rounded-md border border-[#D8DEDC] bg-white p-3 text-[14px] outline-none focus:border-[#2F6F62] focus:ring-2 focus:ring-[#2F6F62]/15 resize-none"
+          />
+        </div>
+
+        {error && (
+          <div className="rounded-md border border-[#F4DEDB] bg-[#FBF0EE] text-[#8C2F27] text-[13px] p-3">
+            저장하지 못했습니다: {error}
+          </div>
+        )}
+      </main>
+
+      <div className="fixed bottom-0 inset-x-0 bg-white border-t border-[#D8DEDC] px-4 sm:px-6 py-3">
+        <div className="max-w-lg mx-auto flex gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setDeviceStatus(ap.device_status || "정상");
+              setNetworkStatus(ap.network_status || "정상");
+              setRemark(ap.remark || "");
+              clearPhoto();
+            }}
+            disabled={saving}
+            className="px-4 rounded-md border border-[#D8DEDC] text-[#4A5A5C] text-[14px] inline-flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <RotateCcw size={14} />
+            초기화
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 rounded-md bg-[#2F6F62] text-white text-[14px] font-medium py-3 inline-flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+            {saving ? "저장 중..." : "조사 결과 저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const [siteId, setSiteId] = useState(null);
+  const [page, setPage] = useState({ name: "list" });
 
-  return siteId ? (
-    <DetailScreen siteId={siteId} onBack={() => setSiteId(null)} />
-  ) : (
-    <ListScreen onSelect={setSiteId} />
-  );
+  if (page.name === "survey") {
+    return (
+      <SurveyScreen
+        site={page.site}
+        ap={page.ap}
+        onDone={() => setPage({ name: "detail", siteId: page.site.id })}
+        onCancel={() => setPage({ name: "detail", siteId: page.site.id })}
+      />
+    );
+  }
+
+  if (page.name === "detail") {
+    return (
+      <DetailScreen
+        siteId={page.siteId}
+        onBack={() => setPage({ name: "list" })}
+        onSurvey={(site, ap) => setPage({ name: "survey", site, ap })}
+      />
+    );
+  }
+
+  return <ListScreen onSelect={(siteId) => setPage({ name: "detail", siteId })} />;
 }
