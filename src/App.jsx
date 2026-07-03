@@ -27,6 +27,7 @@ import {
   submitSurvey,
 } from "./api";
 import { isSupabaseConfigured } from "./supabaseClient";
+import { resizeImage } from "./imageUtils";
 
 /* ------------------------------------------------------------------ */
 /* Small presentational pieces                                        */
@@ -713,6 +714,7 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
   const [remark, setRemark] = useState(ap.remark || "");
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [resizingPhoto, setResizingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
@@ -720,11 +722,19 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
 
   const existingPhotoUrl = resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path);
 
-  function handlePickPhoto(e) {
+  async function handlePickPhoto(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setPhotoFile(file);
-    setPhotoPreview(URL.createObjectURL(file));
+    setResizingPhoto(true);
+    try {
+      // 업로드 전 긴 변이 1024px이 되도록 리사이즈해 용량/속도 부담을 줄입니다.
+      const resized = await resizeImage(file, 1024);
+      setPhotoFile(resized);
+      setPhotoPreview(URL.createObjectURL(resized));
+    } finally {
+      setResizingPhoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   }
 
   function clearPhoto() {
@@ -808,7 +818,12 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
 
         <div>
           <div className="text-[13px] text-[#4A5A5C] mb-2">현장사진</div>
-          {photoPreview || existingPhotoUrl ? (
+          {resizingPhoto ? (
+            <div className="flex flex-col items-center justify-center gap-2 h-40 rounded-md border-2 border-dashed border-[#D8DEDC] bg-white text-[#7A8886]">
+              <Loader2 size={20} className="animate-spin" />
+              <span className="text-[13px]">이미지 처리 중...</span>
+            </div>
+          ) : photoPreview || existingPhotoUrl ? (
             <div className="relative">
               <div className="rounded-md overflow-hidden border border-[#D8DEDC] bg-[#EEF2F1] h-52 flex items-center justify-center">
                 <img
