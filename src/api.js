@@ -107,10 +107,39 @@ function delay(ms) {
  * @param {"정상"|"불량"} params.networkStatus
  * @param {string} params.remark
  * @param {File|null} params.photoFile
+ * @param {{downloadMbps:number, latencyMs:number|null, measuredAt:string}|null} [params.networkTest] - 통신상태 실측 결과 (networkTest.js의 runNetworkTest 반환값). 없으면 수동 입력으로 간주.
+ * @param {boolean|null} [params.wifiConfirmed] - 측정 전 "와이파이 연결 확인" 체크 여부
  * @returns {Promise<Object>} 갱신된 ap_detail 행 (데모 모드 포함)
  */
-export async function submitSurvey({ apId, apNo, location, deviceStatus, networkStatus, remark, photoFile }) {
+export async function submitSurvey({
+  apId,
+  apNo,
+  location,
+  deviceStatus,
+  networkStatus,
+  remark,
+  photoFile,
+  networkTest = null,
+  wifiConfirmed = null,
+}) {
   const surveyDate = new Date().toISOString().slice(0, 10);
+
+  // 실측 결과가 있으면 auto, 없으면(수동 선택만 한 경우) manual로 기록합니다.
+  const measurementFields = networkTest
+    ? {
+        download_mbps: networkTest.downloadMbps,
+        latency_ms: networkTest.latencyMs,
+        measured_at: networkTest.measuredAt,
+        measurement_method: "auto",
+        wifi_confirmed: wifiConfirmed,
+      }
+    : {
+        download_mbps: null,
+        latency_ms: null,
+        measured_at: null,
+        measurement_method: "manual",
+        wifi_confirmed: wifiConfirmed,
+      };
 
   if (!isSupabaseConfigured) {
     await delay(400);
@@ -124,6 +153,7 @@ export async function submitSurvey({ apId, apNo, location, deviceStatus, network
       target.survey_date = surveyDate;
       target.remark = remark;
       target.survey_photo_path = surveyPhotoPath;
+      Object.assign(target, measurementFields);
     }
     return { ...target };
   }
@@ -150,6 +180,7 @@ export async function submitSurvey({ apId, apNo, location, deviceStatus, network
       survey_date: surveyDate,
       remark,
       ...(surveyPhotoPath ? { survey_photo_path: surveyPhotoPath } : {}),
+      ...measurementFields,
     })
     .eq("id", apId)
     .select()
@@ -163,6 +194,7 @@ export async function submitSurvey({ apId, apNo, location, deviceStatus, network
     survey_date: surveyDate,
     survey_photo_path: surveyPhotoPath,
     remark,
+    ...measurementFields,
   });
   if (logError) throw logError;
 
