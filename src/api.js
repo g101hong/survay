@@ -100,9 +100,9 @@ function delay(ms) {
  * 3) survey_log에 이번 조사 결과를 새 행으로 INSERT (이력 보존, 삭제/수정 없음)
  *
  * @param {Object} params
- * @param {number} params.apId
+ * @param {number} params.apId - Storage 파일 경로 생성에도 사용 (ASCII-safe해야 함)
  * @param {string} params.apNo
- * @param {string} params.location - 사진 파일명 생성용 (site.location)
+ * @param {string} [params.location] - 참고용(현재 파일 경로에는 미사용, 한글이 포함될 수 있어 Storage key 생성에서 제외됨)
  * @param {"정상"|"불량"} params.deviceStatus
  * @param {"정상"|"불량"} params.networkStatus
  * @param {string} params.remark
@@ -117,7 +117,7 @@ export async function submitSurvey({ apId, apNo, location, deviceStatus, network
     // 데모 모드: 메모리 상의 목업 데이터를 갱신해 화면에 즉시 반영합니다.
     // (새로고침하면 초기 목업으로 되돌아갑니다 — 실제 저장소가 아니기 때문)
     const target = MOCK_AP_DETAIL.find((a) => a.id === apId);
-    const surveyPhotoPath = photoFile ? `${location}_${apNo.slice(-2)}_${surveyDate}(demo)` : target?.survey_photo_path ?? null;
+    const surveyPhotoPath = photoFile ? `ap${apId}_${surveyDate}(demo)` : target?.survey_photo_path ?? null;
     if (target) {
       target.device_status = deviceStatus;
       target.network_status = networkStatus;
@@ -131,7 +131,10 @@ export async function submitSurvey({ apId, apNo, location, deviceStatus, network
   let surveyPhotoPath = null;
   if (photoFile) {
     const ext = photoFile.name?.split(".").pop() || "jpg";
-    const path = `${location}_${apNo.slice(-2)}_${surveyDate}_${Date.now()}.${ext}`;
+    // ⚠️ Supabase Storage는 파일 경로(key)에 한글 등 비ASCII 문자를 허용하지 않아
+    // "Invalid key" 오류가 발생합니다. 따라서 한글이 포함될 수 있는 location 대신
+    // ASCII-safe한 apId(연번)만 사용해 경로를 만듭니다.
+    const path = `ap${apId}_${surveyDate}_${Date.now()}.${ext}`;
     const { error: uploadError } = await supabase.storage
       .from("ap-survey-photos")
       .upload(path, photoFile, { upsert: true, contentType: photoFile.type });
