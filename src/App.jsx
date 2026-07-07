@@ -202,6 +202,59 @@ function ConfigWarningBanner() {
   );
 }
 
+/**
+ * 지점 좌표를 카카오맵 딥링크로 여는 버튼. (카카오 앱키 발급 불필요)
+ * ------------------------------------------------------------------
+ * map.kakao.com/link/map/이름,위도,경도 는 카카오 JS SDK/정적 지도 API와 달리
+ * 앱키(JavaScript key) 발급 없이 누구나 사용 가능한 공개 딥링크입니다.
+ * 클릭 시 새 탭에서 카카오맵(웹) 또는 카카오맵 앱(모바일)이 해당 좌표로 열립니다.
+ *
+ * 웹취약점 검토:
+ * 1) Reverse Tabnabbing — target="_blank"로 새 탭을 열면 새 페이지가
+ *    window.opener를 통해 원래 페이지를 피싱 페이지로 바꿔치기할 수 있음.
+ *    → rel="noopener noreferrer" 필수 부착.
+ * 2) URL 파라미터 인젝션 — 위치명(label)에 쉼표/특수문자가 섞이면 좌표
+ *    파라미터 구조가 깨질 수 있음 → encodeURIComponent로 인코딩.
+ * 3) 잘못된/결측 좌표값 — null, undefined, 문자열, NaN, 범위 밖 값이 그대로
+ *    링크에 들어가면 깨진 링크가 생성됨 → 렌더링 전 타입·범위(-90~90, -180~180)
+ *    검증 후 실패 시 버튼 자체를 렌더링하지 않음(조용히 숨김).
+ * 4) XSS — 텍스트는 JSX 텍스트 노드로만 렌더링(React 기본 이스케이프 적용),
+ *    dangerouslySetInnerHTML 사용하지 않음.
+ * ------------------------------------------------------------------
+ */
+function isValidCoord(lat, lng) {
+  return (
+    typeof lat === "number" &&
+    typeof lng === "number" &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+function KakaoMapLink({ label, latitude, longitude }) {
+  if (!isValidCoord(latitude, longitude)) return null;
+
+  const url = `https://map.kakao.com/link/map/${encodeURIComponent(
+    label || "위치"
+  )},${latitude},${longitude}`;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 text-[12px] text-[#2F6F62] border border-[#D8DEDC] rounded-md px-2.5 py-1.5 hover:bg-[#EEF2F1] transition-colors w-fit"
+    >
+      <MapPin size={13} />
+      카카오맵에서 보기
+    </a>
+  );
+}
+
 function CenteredLoader() {
   return (
     <div className="flex items-center justify-center py-24 text-[#7A8886]">
@@ -619,6 +672,14 @@ function DetailScreen({ siteId, onBack, onSurvey }) {
                   <dd>{site.address}</dd>
                 </div>
               </dl>
+
+              <div className="mt-3">
+                <KakaoMapLink
+                  label={site.location}
+                  latitude={site.latitude}
+                  longitude={site.longitude}
+                />
+              </div>
 
               <div className="mt-5 flex items-center gap-4 pt-4 border-t border-[#EEF1F0]">
                 <div className="text-sm">

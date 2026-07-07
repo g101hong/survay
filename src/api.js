@@ -44,13 +44,20 @@ function requireSession() {
  * 전체 지점 목록(상세현황)을 가져옵니다.
  * ⚠️ 조회(SELECT)는 RLS 정책상 anon에게 계속 허용되어 있어야 하는 부분입니다.
  *    (site_info / ap_detail / survey_log 세 테이블 모두 "anon_select_*" 정책 적용 전제)
+ *
+ * [v1 → v2] 카카오맵 딥링크(위치 보기) 기능을 위해 latitude/longitude 컬럼을
+ *           select 목록에 추가. 좌표는 site_info_좌표_반영.sql 마이그레이션으로
+ *           반영된 값이며, 값이 없는 지점은 null로 내려오므로 화면단에서
+ *           반드시 유효성(범위/타입) 검증 후 사용해야 합니다. (KakaoMapLink 참고)
  */
 export async function fetchSites() {
   requireSupabase();
 
   const { data, error } = await supabase
     .from("site_info")
-    .select("id, gugun, install_year, location, address, service_photo_path")
+    .select(
+      "id, gugun, install_year, location, address, service_photo_path, latitude, longitude"
+    )
     .order("id", { ascending: true });
 
   if (error) throw error;
