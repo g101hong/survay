@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   History,
   Clock,
+  Download,
 } from "lucide-react";
 import {
   fetchSites,
@@ -30,6 +31,7 @@ import { isSupabaseConfigured } from "./supabaseClient";
 import { resizeImage } from "./imageUtils";
 import { runNetworkTest } from "./networkTest";
 import PinGate, { LogoutButton } from "./PinGate";
+import { exportWifiDataToExcel } from "./exportExcel";
 
 /* ------------------------------------------------------------------ */
 /* Small presentational pieces                                        */
@@ -387,6 +389,19 @@ function ListScreen({ onSelect, onDashboard }) {
     setSortBy("id");
   }
 
+  // 현재 필터/검색이 적용된 결과만 엑셀로 내보냅니다.
+  // (전체 데이터가 필요하면 대시보드 화면의 "전체 데이터 내보내기"를 사용)
+  function handleExport() {
+    const filteredIds = new Set(rows.map((r) => r.id));
+    const filteredSites = (sites ?? []).filter((s) => filteredIds.has(s.id));
+    const filteredAps = (apSummary ?? []).filter((a) => filteredIds.has(a.site_id));
+    exportWifiDataToExcel({
+      sites: filteredSites,
+      apDetails: filteredAps,
+      fileName: `와이파이_현장조사_목록_${filteredSites.length}건`,
+    });
+  }
+
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <ConfigWarningBanner />
@@ -402,6 +417,14 @@ function ListScreen({ onSelect, onDashboard }) {
             </h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleExport}
+              disabled={!sites || rows.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40"
+            >
+              <Download size={14} />
+              <span className="hidden sm:inline">엑셀 내보내기</span>
+            </button>
             <button
               onClick={onDashboard}
               className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors"
@@ -1334,6 +1357,16 @@ function DashboardScreen({ onBack, onOpenSite }) {
 
   const loading = !sites || !aps || !logs;
 
+  // 전체 지점/AP/조사이력을 엑셀로 내보냅니다 (필터 없이 전체 데이터).
+  function handleExportAll() {
+    exportWifiDataToExcel({
+      sites,
+      apDetails: aps,
+      surveyLogs: logs,
+      fileName: "와이파이_현장조사_전체",
+    });
+  }
+
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <ConfigWarningBanner />
@@ -1345,11 +1378,23 @@ function DashboardScreen({ onBack, onOpenSite }) {
           >
             <ChevronLeft size={15} /> 목록으로
           </button>
-          <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
-            <LayoutDashboard size={16} strokeWidth={2.5} />
-            <span className="text-[11px] font-mono tracking-[0.18em] uppercase">현황 요약</span>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
+                <LayoutDashboard size={16} strokeWidth={2.5} />
+                <span className="text-[11px] font-mono tracking-[0.18em] uppercase">현황 요약</span>
+              </div>
+              <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
+            </div>
+            <button
+              onClick={handleExportAll}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40 shrink-0"
+            >
+              <Download size={14} />
+              전체 데이터 엑셀 내보내기
+            </button>
           </div>
-          <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
         </div>
       </header>
 

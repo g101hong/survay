@@ -83,14 +83,21 @@ export async function fetchApDetailsBySite(siteId) {
 }
 
 /**
- * 전체 AP 목록을 한 번에 가져옵니다 (목록/대시보드 화면에서 지점별 대수·상태 요약용).
+ * 전체 AP 목록을 한 번에 가져옵니다 (목록/대시보드 화면에서 지점별 대수·상태 요약,
+ * 그리고 엑셀 내보내기의 AP세부사항 시트에 사용).
+ *
+ * ⚠️ photo_path/survey_photo_path(Storage 내부 경로)는 의도적으로 select하지 않습니다.
+ *    화면 요약이나 엑셀 내보내기 어디에도 내부 파일 키를 노출할 이유가 없고,
+ *    사진이 필요한 화면(DetailScreen)은 fetchApDetailsBySite로 별도 조회합니다.
  */
 export async function fetchAllApDetails() {
   requireSupabase();
 
   const { data, error } = await supabase
     .from("ap_detail")
-    .select("id, site_id, ap_no, in_out, install_point, device_status, network_status, survey_date");
+    .select(
+      "id, site_id, ap_no, in_out, install_point, device_status, network_status, survey_date, remark, download_mbps, latency_ms, measurement_method, wifi_confirmed"
+    );
 
   if (error) throw error;
   return data;
