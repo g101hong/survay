@@ -31,7 +31,10 @@ import { isSupabaseConfigured } from "./supabaseClient";
 import { resizeImage } from "./imageUtils";
 import { runNetworkTest } from "./networkTest";
 import PinGate, { LogoutButton } from "./PinGate";
-import { exportWifiDataToExcel } from "./exportExcel";
+// exportExcel.js는 ExcelJS(사진 삽입 지원)를 포함해 용량이 커서, 항상 로드되지 않고
+// "엑셀 내보내기" 버튼을 실제로 눌렀을 때만 불러오도록 동적 import()로 처리합니다.
+// (대부분의 사용자는 모바일로 SurveyScreen만 쓰는 현장조사자이며, 이 기능은
+// 관리자가 가끔 쓰는 기능이므로 초기 로딩 속도에 영향을 주지 않는 것이 중요합니다.)
 
 /* ------------------------------------------------------------------ */
 /* Small presentational pieces                                        */
@@ -390,16 +393,29 @@ function ListScreen({ onSelect, onDashboard }) {
   }
 
   // 현재 필터/검색이 적용된 결과만 엑셀로 내보냅니다.
-  // (전체 데이터가 필요하면 대시보드 화면의 "전체 데이터 내보내기"를 사용)
-  function handleExport() {
-    const filteredIds = new Set(rows.map((r) => r.id));
-    const filteredSites = (sites ?? []).filter((s) => filteredIds.has(s.id));
-    const filteredAps = (apSummary ?? []).filter((a) => filteredIds.has(a.site_id));
-    exportWifiDataToExcel({
-      sites: filteredSites,
-      apDetails: filteredAps,
-      fileName: `와이파이_현장조사_목록_${filteredSites.length}건`,
-    });
+  // (전체 데이터 + 조사이력/사진이 필요하면 대시보드 화면의 "전체 데이터 내보내기"를 사용)
+  // exportWifiDataToExcel은 ExcelJS의 비동기 저장 방식 때문에 Promise를 반환하므로,
+  // 실패 시 조용히 묻히지 않도록 async/catch로 처리합니다.
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { exportWifiDataToExcel } = await import("./exportExcel");
+      const filteredIds = new Set(rows.map((r) => r.id));
+      const filteredSites = (sites ?? []).filter((s) => filteredIds.has(s.id));
+      const filteredAps = (apSummary ?? []).filter((a) => filteredIds.has(a.site_id));
+      await exportWifiDataToExcel({
+        sites: filteredSites,
+        apDetails: filteredAps,
+        fileName: `와이파이_현장조사_목록_${filteredSites.length}건`,
+      });
+    } catch (err) {
+      alert(`엑셀 내보내기에 실패했습니다: ${err.message ?? err}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -419,11 +435,11 @@ function ListScreen({ onSelect, onDashboard }) {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={handleExport}
-              disabled={!sites || rows.length === 0}
+              disabled={!sites || rows.length === 0 || exporting}
               className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40"
             >
-              <Download size={14} />
-              <span className="hidden sm:inline">엑셀 내보내기</span>
+              {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              <span className="hidden sm:inline">{exporting ? "내보내는 중..." : "엑셀 내보내기"}</span>
             </button>
             <button
               onClick={onDashboard}
@@ -1358,13 +1374,40 @@ function DashboardScreen({ onBack, onOpenSite }) {
   const loading = !sites || !aps || !logs;
 
   // 전체 지점/AP/조사이력을 엑셀로 내보냅니다 (필터 없이 전체 데이터).
-  function handleExportAll() {
-    exportWifiDataToExcel({
-      sites,
-      apDetails: aps,
-      surveyLogs: logs,
-      fileName: "와이파이_현장조사_전체",
-    });
+  // 조사이력 시트에는 사진도 함께 첨부되며, 사진이 많으면 시간이 걸릴 수 있어
+  // 진행률(exportProgress)과 완료 후 결과 요약(exportResult)을 화면에 보여줍니다.
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(null);
+  const [exportResult, setExportResult] = useState(null);
+
+  async function handleExportAll() {
+    if (exporting) return;
+    setExporting(true);
+    setExportProgress(null);
+    setExportResult(null);
+    try {
+      const { exportWifiDataToExcel } = await import("./exportExcel");
+      const summary = await exportWifiDataToExcel({
+        sites,
+        apDetails: aps,
+        surveyLogs: logs,
+        fileName: "와이파이_현장조사_전체",
+        onProgress: (done, total) => setExportProgress({ done, total }),
+      });
+
+      if (summary && summary.total > 0) {
+        const parts = [`사진 ${summary.embedded}/${summary.total}장 첨부`];
+        if (summary.failed > 0) parts.push(`실패 ${summary.failed}장`);
+        if (summary.overCap > 0) parts.push(`상한 초과 ${summary.overCap}장 미첨부`);
+        setExportResult(parts.join(" · "));
+      } else {
+        setExportResult("내보내기 완료");
+      }
+    } catch (err) {
+      setExportResult(`내보내기 실패: ${err.message ?? err}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -1386,14 +1429,23 @@ function DashboardScreen({ onBack, onOpenSite }) {
               </div>
               <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
             </div>
-            <button
-              onClick={handleExportAll}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40 shrink-0"
-            >
-              <Download size={14} />
-              전체 데이터 엑셀 내보내기
-            </button>
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              <button
+                onClick={handleExportAll}
+                disabled={loading || exporting}
+                className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40 shrink-0"
+              >
+                {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                {exporting
+                  ? exportProgress
+                    ? `사진 첨부 중... (${exportProgress.done}/${exportProgress.total})`
+                    : "내보내는 중..."
+                  : "전체 데이터 엑셀 내보내기(사진 포함)"}
+              </button>
+              {exportResult && (
+                <span className="text-[11px] font-mono text-[#7A8886]">{exportResult}</span>
+              )}
+            </div>
           </div>
         </div>
       </header>

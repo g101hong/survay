@@ -105,14 +105,19 @@ export async function fetchAllApDetails() {
 
 /**
  * 전체 조사이력(survey_log)을 가져옵니다.
- * 대시보드의 "반복 불량 / 상태 악화" 분석에 사용됩니다.
+ * 대시보드의 "반복 불량 / 상태 악화" 분석, 그리고 엑셀 내보내기의
+ * "조사이력" 시트(사진 첨부 포함)에 사용됩니다.
+ *
+ * survey_photo_path: 내부 Storage 경로. 화면에는 직접 노출하지 않고,
+ * 엑셀 내보내기 시 resolvePhotoUrl()로 서명 URL을 받아 이미지를
+ * 내려받아 파일에 삽입하는 용도로만 사용합니다.
  */
 export async function fetchAllSurveyLogs() {
   requireSupabase();
 
   const { data, error } = await supabase
     .from("survey_log")
-    .select("id, ap_id, device_status, network_status, survey_date, remark")
+    .select("id, ap_id, device_status, network_status, survey_date, remark, survey_photo_path")
     .order("survey_date", { ascending: true });
 
   if (error) throw error;
