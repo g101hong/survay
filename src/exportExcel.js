@@ -254,6 +254,7 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
     { header: "연번", key: "no", width: 6 },
     { header: "조사일", key: "date", width: 12 },
     { header: "위치", key: "location", width: 16 },
+    { header: "설치지점", key: "installPoint", width: 16 },
     { header: "AP", key: "apNo", width: 10 },
     { header: "기기상태", key: "deviceStatus", width: 10 },
     { header: "통신상태", key: "networkStatus", width: 10 },
@@ -275,6 +276,7 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
       no: idx + 1,
       date: log.survey_date,
       location: sanitizeCell(site?.location ?? ""),
+      installPoint: sanitizeCell(ap?.install_point ?? ""),
       apNo: sanitizeCell(ap?.ap_no ?? ""),
       deviceStatus: log.device_status,
       networkStatus: log.network_status,
@@ -305,12 +307,12 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
       ws.getRow(excelRow).height = PHOTO_ROW_HEIGHT;
       const imageId = workbook.addImage({ buffer: image.buffer, extension: image.extension });
       ws.addImage(imageId, {
-        tl: { col: 7, row: excelRow - 1 }, // ExcelJS 앵커는 0-based (8번째 열 = index 7)
+        tl: { col: 8, row: excelRow - 1 }, // ExcelJS 앵커는 0-based (9번째 열 = index 8, 설치지점 컬럼 추가로 한 칸 밀림)
         ext: PHOTO_PX,
       });
     } else {
       failed += 1;
-      ws.getCell(`H${excelRow}`).value = "첨부 실패";
+      ws.getCell(`I${excelRow}`).value = "첨부 실패";
     }
 
     done += 1;
@@ -319,7 +321,7 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
 
   overCap.forEach((rowIdx) => {
     const excelRow = rowIdx + 2;
-    ws.getCell(`H${excelRow}`).value = "사진 있음(상한 초과로 미첨부)";
+    ws.getCell(`I${excelRow}`).value = "사진 있음(상한 초과로 미첨부)";
   });
 
   return {
