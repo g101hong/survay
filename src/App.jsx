@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   History,
   Clock,
+  Download,
   Pencil,
 } from "lucide-react";
 import {
@@ -31,6 +32,12 @@ import {
 } from "./api";
 import { isSupabaseConfigured } from "./supabaseClient";
 import { resizeImage } from "./imageUtils";
+import { runNetworkTest } from "./networkTest";
+import PinGate, { LogoutButton } from "./PinGate";
+// exportExcel.js는 ExcelJS(사진 삽입 지원)를 포함해 용량이 커서, 항상 로드되지 않고
+// "엑셀 내보내기" 버튼을 실제로 눌렀을 때만 불러오도록 동적 import()로 처리합니다.
+// (대부분의 사용자는 모바일로 SurveyScreen만 쓰는 현장조사자이며, 이 기능은
+// 관리자가 가끔 쓰는 기능이므로 초기 로딩 속도에 영향을 주지 않는 것이 중요합니다.)
 
 /* ------------------------------------------------------------------ */
 /* Small presentational pieces                                        */
@@ -66,8 +73,58 @@ function StatusChip({ label, ok }) {
   );
 }
 
-function PhotoTile({ label, url, tall }) {
+/**
+ * 사진 타일. (v2 — bucket/path를 받아 내부에서 서명 URL을 비동기로 로드)
+ * ------------------------------------------------------------------
+ * [v1 → v2 변경 사항]
+ * v1에서는 부모가 미리 계산한 고정(공개) URL을 `url` prop으로 그대로
+ * 받았습니다. service-photos/ap-photos/ap-survey-photos 버킷이 Private로
+ * 전환되면서, URL 발급 자체가 세션 검증이 필요한 비동기 작업(Edge Function
+ * 호출)이 되었습니다. 그래서 v2에서는 `bucket`/`path`를 받아 컴포넌트
+ * 내부에서 `resolvePhotoUrl()`을 호출해 로딩 상태를 직접 관리합니다.
+ * (App.jsx의 각 호출부는 `url` 대신 `bucket`/`path`만 넘기면 되고,
+ * 로딩/오류 처리는 이 컴포넌트 안에 캡슐화되어 있습니다.)
+ * ------------------------------------------------------------------
+ */
+function PhotoTile({ label, bucket, path, tall }) {
   const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setUrl(null);
+
+    if (!path) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    resolvePhotoUrl(bucket, path)
+      .then((resolved) => {
+        if (!cancelled) setUrl(resolved);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [bucket, path]);
+
+  if (loading) {
+    return (
+      <div
+        className={`relative overflow-hidden rounded-md border border-[#D8DEDC] bg-[#EEF2F1] flex items-center justify-center ${
+          tall ? "h-56" : "h-40"
+        }`}
+      >
+        <Loader2 size={18} className="animate-spin text-[#7A8886]" />
+      </div>
+    );
+  }
 
   if (url) {
     return (
@@ -140,16 +197,69 @@ function PhotoTile({ label, url, tall }) {
   );
 }
 
-function DemoBanner() {
+function ConfigWarningBanner() {
   if (isSupabaseConfigured) return null;
   return (
     <div className="bg-[#FBF2D9] border-b border-[#EBD9A0] text-[#6B5313] text-[12px]">
       <div className="max-w-5xl mx-auto px-6 py-2 flex items-center gap-2">
         <AlertTriangle size={13} />
-        데모 모드입니다. Supabase 환경변수가 설정되면 실제 DB 데이터로 자동 전환됩니다.
-        환경변수를 이미 넣었는데도 이 배너가 보인다면 개발자도구(F12) Console에서 원인을 확인하세요.
+        Supabase 환경변수가 설정되지 않아 데이터를 불러오거나 저장할 수 없습니다.
+        VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY를 설정한 뒤 다시 배포(재빌드)해주세요.
       </div>
     </div>
+  );
+}
+
+/**
+ * 지점 좌표를 카카오맵 딥링크로 여는 버튼. (카카오 앱키 발급 불필요)
+ * ------------------------------------------------------------------
+ * map.kakao.com/link/map/이름,위도,경도 는 카카오 JS SDK/정적 지도 API와 달리
+ * 앱키(JavaScript key) 발급 없이 누구나 사용 가능한 공개 딥링크입니다.
+ * 클릭 시 새 탭에서 카카오맵(웹) 또는 카카오맵 앱(모바일)이 해당 좌표로 열립니다.
+ *
+ * 웹취약점 검토:
+ * 1) Reverse Tabnabbing — target="_blank"로 새 탭을 열면 새 페이지가
+ *    window.opener를 통해 원래 페이지를 피싱 페이지로 바꿔치기할 수 있음.
+ *    → rel="noopener noreferrer" 필수 부착.
+ * 2) URL 파라미터 인젝션 — 위치명(label)에 쉼표/특수문자가 섞이면 좌표
+ *    파라미터 구조가 깨질 수 있음 → encodeURIComponent로 인코딩.
+ * 3) 잘못된/결측 좌표값 — null, undefined, 문자열, NaN, 범위 밖 값이 그대로
+ *    링크에 들어가면 깨진 링크가 생성됨 → 렌더링 전 타입·범위(-90~90, -180~180)
+ *    검증 후 실패 시 버튼 자체를 렌더링하지 않음(조용히 숨김).
+ * 4) XSS — 텍스트는 JSX 텍스트 노드로만 렌더링(React 기본 이스케이프 적용),
+ *    dangerouslySetInnerHTML 사용하지 않음.
+ * ------------------------------------------------------------------
+ */
+function isValidCoord(lat, lng) {
+  return (
+    typeof lat === "number" &&
+    typeof lng === "number" &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+function KakaoMapLink({ label, latitude, longitude }) {
+  if (!isValidCoord(latitude, longitude)) return null;
+
+  const url = `https://map.kakao.com/link/map/${encodeURIComponent(
+    label || "위치"
+  )},${latitude},${longitude}`;
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 text-[12px] text-[#2F6F62] border border-[#D8DEDC] rounded-md px-2.5 py-1.5 hover:bg-[#EEF2F1] transition-colors w-fit"
+    >
+      <MapPin size={13} />
+      카카오맵에서 보기
+    </a>
   );
 }
 
@@ -285,9 +395,35 @@ function ListScreen({ onSelect, onDashboard }) {
     setSortBy("id");
   }
 
+  // 현재 필터/검색이 적용된 결과만 엑셀로 내보냅니다.
+  // (전체 데이터 + 조사이력/사진이 필요하면 대시보드 화면의 "전체 데이터 내보내기"를 사용)
+  // exportWifiDataToExcel은 ExcelJS의 비동기 저장 방식 때문에 Promise를 반환하므로,
+  // 실패 시 조용히 묻히지 않도록 async/catch로 처리합니다.
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { exportWifiDataToExcel } = await import("./exportExcel");
+      const filteredIds = new Set(rows.map((r) => r.id));
+      const filteredSites = (sites ?? []).filter((s) => filteredIds.has(s.id));
+      const filteredAps = (apSummary ?? []).filter((a) => filteredIds.has(a.site_id));
+      await exportWifiDataToExcel({
+        sites: filteredSites,
+        apDetails: filteredAps,
+        fileName: `와이파이_현장조사_목록_${filteredSites.length}건`,
+      });
+    } catch (err) {
+      alert(`엑셀 내보내기에 실패했습니다: ${err.message ?? err}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
-      <DemoBanner />
+      <ConfigWarningBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 pb-5 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -299,13 +435,27 @@ function ListScreen({ onSelect, onDashboard }) {
               설치 현황 조회
             </h1>
           </div>
-          <button
-            onClick={onDashboard}
-            className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors shrink-0"
-          >
-            <LayoutDashboard size={14} />
-            <span className="hidden sm:inline">대시보드</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleExport}
+              disabled={!sites || rows.length === 0 || exporting}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40"
+            >
+              {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              <span className="hidden sm:inline">{exporting ? "내보내는 중..." : "엑셀 내보내기"}</span>
+            </button>
+            <button
+              onClick={onDashboard}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors"
+            >
+              <LayoutDashboard size={14} />
+              <span className="hidden sm:inline">대시보드</span>
+            </button>
+            <LogoutButton
+              iconSize={14}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#C1443B] hover:text-[#C1443B] transition-colors"
+            />
+          </div>
         </div>
 
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-4">
@@ -527,7 +677,7 @@ function DetailScreen({ siteId, onBack, onSurvey, onHistory }) {
 
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
-      <DemoBanner />
+      <ConfigWarningBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-6 py-4">
           <button
@@ -565,6 +715,14 @@ function DetailScreen({ siteId, onBack, onSurvey, onHistory }) {
                 </div>
               </dl>
 
+              <div className="mt-3">
+                <KakaoMapLink
+                  label={site.location}
+                  latitude={site.latitude}
+                  longitude={site.longitude}
+                />
+              </div>
+
               <div className="mt-5 flex items-center gap-4 pt-4 border-t border-[#EEF1F0]">
                 <div className="text-sm">
                   <span className="font-mono text-lg">{aps.length}</span>
@@ -585,7 +743,8 @@ function DetailScreen({ siteId, onBack, onSurvey, onHistory }) {
               <div className="text-[12px] text-[#7A8886] mb-2">서비스범위 사진</div>
               <PhotoTile
                 label={`${site.location}.jpg`}
-                url={resolvePhotoUrl("service-photos", site.service_photo_path)}
+                bucket="service-photos"
+                path={site.service_photo_path}
                 tall
               />
             </div>
@@ -633,14 +792,16 @@ function DetailScreen({ siteId, onBack, onSurvey, onHistory }) {
                       <div className="pt-3 border-t border-[#EEF1F0] space-y-3">
                         <PhotoTile
                           label={`${site.location}_${ap.ap_no.slice(-2)}.jpg`}
-                          url={resolvePhotoUrl("ap-photos", ap.photo_path)}
+                          bucket="ap-photos"
+                          path={ap.photo_path}
                         />
                         {ap.survey_photo_path && (
                           <div>
                             <div className="text-[11px] text-[#7A8886] mb-1.5">최근 조사 사진</div>
                             <PhotoTile
                               label="현장조사 사진"
-                              url={resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path)}
+                              bucket="ap-survey-photos"
+                              path={ap.survey_photo_path}
                             />
                           </div>
                         )}
@@ -648,6 +809,38 @@ function DetailScreen({ siteId, onBack, onSurvey, onHistory }) {
                           <span>최근 조사일</span>
                           <span className="font-mono text-[#1C2B2C]">{ap.survey_date || "조사 이력 없음"}</span>
                         </div>
+                        {(ap.download_mbps != null || ap.latency_ms != null) && (
+                          <div className="rounded-md bg-[#F3F5F4] p-2.5 text-[12px] text-[#4A5A5C] space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] text-[#7A8886]">통신상태 측정값</span>
+                              {ap.measurement_method && (
+                                <span className="text-[10px] font-mono text-[#7A8886]">
+                                  {ap.measurement_method === "auto" ? "자동 측정" : "수동 입력"}
+                                </span>
+                              )}
+                            </div>
+                            {ap.download_mbps != null && (
+                              <div className="flex justify-between">
+                                <span>다운로드 속도</span>
+                                <span className="font-mono text-[#1C2B2C]">{ap.download_mbps} Mbps</span>
+                              </div>
+                            )}
+                            {ap.latency_ms != null && (
+                              <div className="flex justify-between">
+                                <span>지연시간</span>
+                                <span className="font-mono text-[#1C2B2C]">{ap.latency_ms} ms</span>
+                              </div>
+                            )}
+                            {ap.wifi_confirmed != null && (
+                              <div className="flex justify-between">
+                                <span>와이파이 연결 확인</span>
+                                <span className="font-mono text-[#1C2B2C]">
+                                  {ap.wifi_confirmed ? "확인함" : "미확인"}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {ap.remark && (
                           <div className="text-[12px] bg-[#F3F5F4] rounded-md p-2.5 text-[#4A5A5C]">
                             {ap.remark}
@@ -723,6 +916,68 @@ function ToggleField({ label, value, onChange }) {
   );
 }
 
+function NetworkTestPanel({ wifiConfirmed, onWifiConfirmedChange, testing, testResult, testError, onRunTest }) {
+  return (
+    <div className="rounded-md border border-[#D8DEDC] bg-white p-3 space-y-3">
+      <div className="text-[13px] text-[#4A5A5C]">통신상태 측정</div>
+
+      <label className="flex items-start gap-2 text-[13px] text-[#4A5A5C]">
+        <input
+          type="checkbox"
+          checked={wifiConfirmed === true}
+          onChange={(e) => onWifiConfirmedChange(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>측정 전 확인: 이 기기가 현재 점검 대상 AP의 와이파이에 연결되어 있습니다</span>
+      </label>
+
+      <button
+        type="button"
+        onClick={onRunTest}
+        disabled={testing || !wifiConfirmed}
+        className="w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-[#2F6F62] text-[#2F6F62] text-[13px] font-medium py-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {testing ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
+        {testing ? "측정 중..." : "통신상태 측정 시작"}
+      </button>
+
+      {!wifiConfirmed && (
+        <p className="text-[12px] text-[#7A8886]">측정하려면 먼저 와이파이 연결을 확인해주세요.</p>
+      )}
+
+      {testError && <p className="text-[12px] text-[#C1443B]">측정 실패: {testError}</p>}
+
+      {testResult && (
+        <div className="rounded-md bg-[#F3F5F4] p-2.5 text-[12px] text-[#4A5A5C] space-y-1">
+          <div className="flex justify-between">
+            <span>다운로드 속도</span>
+            <span className="font-mono text-[#1C2B2C]">{testResult.downloadMbps} Mbps</span>
+          </div>
+          <div className="flex justify-between">
+            <span>지연시간</span>
+            <span className="font-mono text-[#1C2B2C]">
+              {testResult.latencyMs != null ? `${testResult.latencyMs} ms` : "측정 안 됨"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>자동 판정</span>
+            <span
+              className={`font-mono ${
+                testResult.suggestedStatus === "정상" ? "text-[#2F6F62]" : "text-[#C1443B]"
+              }`}
+            >
+              {testResult.suggestedStatus}
+            </span>
+          </div>
+          <p className="text-[11px] text-[#7A8886] pt-1">
+            측정값은 참고용입니다. 아래 통신상태를 확인·수정한 뒤 저장하세요.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SurveyScreen({ site, ap, onDone, onCancel }) {
   const [deviceStatus, setDeviceStatus] = useState(ap.device_status || "정상");
   const [networkStatus, setNetworkStatus] = useState(ap.network_status || "정상");
@@ -734,8 +989,27 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
   const fileInputRef = useRef(null);
+  const [wifiConfirmed, setWifiConfirmed] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testError, setTestError] = useState(null);
 
-  const existingPhotoUrl = resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path);
+  const [existingPhotoUrl, setExistingPhotoUrl] = useState(null);
+
+  // ap-survey-photos가 Private 버킷으로 전환되면서 URL 발급이 세션 검증이
+  // 필요한 비동기 작업(Edge Function 호출)이 되었습니다. 화면 진입 시
+  // 한 번만 "기존 사진"의 서명 URL을 받아옵니다.
+  useEffect(() => {
+    let cancelled = false;
+    setExistingPhotoUrl(null);
+    if (!ap.survey_photo_path) return;
+    resolvePhotoUrl("ap-survey-photos", ap.survey_photo_path).then((url) => {
+      if (!cancelled) setExistingPhotoUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ap.survey_photo_path]);
 
   async function handlePickPhoto(e) {
     const file = e.target.files?.[0];
@@ -758,6 +1032,20 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  async function handleRunNetworkTest() {
+    setTesting(true);
+    setTestError(null);
+    try {
+      const result = await runNetworkTest();
+      setTestResult(result);
+      setNetworkStatus(result.suggestedStatus); // 측정 결과로 통신상태 자동 반영 (아래에서 수정 가능)
+    } catch (err) {
+      setTestError(err.message ?? String(err));
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function handleSave() {
     setSaving(true);
     setError(null);
@@ -770,6 +1058,8 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
         networkStatus,
         remark,
         photoFile,
+        networkTest: testResult,
+        wifiConfirmed,
       });
       setDone(true);
       setTimeout(() => onDone(), 900);
@@ -796,7 +1086,7 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
 
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
-      <DemoBanner />
+      <ConfigWarningBanner />
       <header className="border-b border-[#D8DEDC] bg-white sticky top-0 z-10">
         <div className="max-w-lg mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <button
@@ -829,6 +1119,16 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
         </div>
 
         <ToggleField label="기기상태" value={deviceStatus} onChange={setDeviceStatus} />
+
+        <NetworkTestPanel
+          wifiConfirmed={wifiConfirmed}
+          onWifiConfirmedChange={setWifiConfirmed}
+          testing={testing}
+          testResult={testResult}
+          testError={testError}
+          onRunTest={handleRunNetworkTest}
+        />
+
         <ToggleField label="통신상태" value={networkStatus} onChange={setNetworkStatus} />
 
         <div>
@@ -913,6 +1213,9 @@ function SurveyScreen({ site, ap, onDone, onCancel }) {
               setNetworkStatus(ap.network_status || "정상");
               setRemark(ap.remark || "");
               clearPhoto();
+              setWifiConfirmed(null);
+              setTestResult(null);
+              setTestError(null);
             }}
             disabled={saving}
             className="px-4 rounded-md border border-[#D8DEDC] text-[#4A5A5C] text-[14px] inline-flex items-center gap-1.5 disabled:opacity-40"
@@ -965,7 +1268,7 @@ function SurveyHistoryScreen({ site, ap, onBack }) {
 
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
-      <DemoBanner />
+      <ConfigWarningBanner />
       <header className="border-b border-[#D8DEDC] bg-white sticky top-0 z-10">
         <div className="max-w-lg mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <button
@@ -1048,8 +1351,6 @@ function SurveyLogCard({ log, apId, isLatest, editing, onEditStart, onEditCancel
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
-  const existingPhotoUrl = resolvePhotoUrl("ap-survey-photos", log.survey_photo_path);
-
   useEffect(() => {
     if (editing) return;
     // 편집을 시작/취소할 때마다 원본 값으로 되돌립니다.
@@ -1127,7 +1428,7 @@ function SurveyLogCard({ log, apId, isLatest, editing, onEditStart, onEditCancel
 
         {log.survey_photo_path && (
           <div className="mb-2">
-            <PhotoTile label="현장조사 사진" url={resolvePhotoUrl("ap-survey-photos", log.survey_photo_path)} />
+            <PhotoTile label="현장조사 사진" bucket="ap-survey-photos" path={log.survey_photo_path} />
           </div>
         )}
 
@@ -1167,18 +1468,12 @@ function SurveyLogCard({ log, apId, isLatest, editing, onEditStart, onEditCancel
             <Loader2 size={20} className="animate-spin" />
             <span className="text-[13px]">이미지 처리 중...</span>
           </div>
-        ) : photoPreview || existingPhotoUrl ? (
+        ) : photoPreview ? (
           <div className="rounded-md overflow-hidden border border-[#D8DEDC] bg-[#EEF2F1] h-44 flex items-center justify-center">
-            <img
-              src={photoPreview || existingPhotoUrl}
-              alt="현장조사 사진"
-              className="w-full h-full object-contain"
-            />
+            <img src={photoPreview} alt="현장조사 사진" className="w-full h-full object-contain" />
           </div>
         ) : (
-          <div className="h-24 rounded-md border-2 border-dashed border-[#D8DEDC] flex items-center justify-center text-[12px] text-[#7A8886]">
-            사진 없음
-          </div>
+          <PhotoTile label="현재 사진" bucket="ap-survey-photos" path={log.survey_photo_path} />
         )}
         <label className="mt-2 block text-center py-2 rounded-md border border-[#D8DEDC] bg-white text-[13px] text-[#4A5A5C] cursor-pointer">
           사진 교체
@@ -1382,9 +1677,46 @@ function DashboardScreen({ onBack, onOpenSite }) {
 
   const loading = !sites || !aps || !logs;
 
+  // 전체 지점/AP/조사이력을 엑셀로 내보냅니다 (필터 없이 전체 데이터).
+  // 조사이력 시트에는 사진도 함께 첨부되며, 사진이 많으면 시간이 걸릴 수 있어
+  // 진행률(exportProgress)과 완료 후 결과 요약(exportResult)을 화면에 보여줍니다.
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(null);
+  const [exportResult, setExportResult] = useState(null);
+
+  async function handleExportAll() {
+    if (exporting) return;
+    setExporting(true);
+    setExportProgress(null);
+    setExportResult(null);
+    try {
+      const { exportWifiDataToExcel } = await import("./exportExcel");
+      const summary = await exportWifiDataToExcel({
+        sites,
+        apDetails: aps,
+        surveyLogs: logs,
+        fileName: "와이파이_현장조사_전체",
+        onProgress: (done, total) => setExportProgress({ done, total }),
+      });
+
+      if (summary && summary.total > 0) {
+        const parts = [`사진 ${summary.embedded}/${summary.total}장 첨부`];
+        if (summary.failed > 0) parts.push(`실패 ${summary.failed}장`);
+        if (summary.overCap > 0) parts.push(`상한 초과 ${summary.overCap}장 미첨부`);
+        setExportResult(parts.join(" · "));
+      } else {
+        setExportResult("내보내기 완료");
+      }
+    } catch (err) {
+      setExportResult(`내보내기 실패: ${err.message ?? err}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
-      <DemoBanner />
+      <ConfigWarningBanner />
       <header className="border-b border-[#D8DEDC] bg-[#F3F5F4]/90 backdrop-blur sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 pb-4">
           <button
@@ -1393,11 +1725,32 @@ function DashboardScreen({ onBack, onOpenSite }) {
           >
             <ChevronLeft size={15} /> 목록으로
           </button>
-          <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
-            <LayoutDashboard size={16} strokeWidth={2.5} />
-            <span className="text-[11px] font-mono tracking-[0.18em] uppercase">현황 요약</span>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-[#2F6F62] mb-1">
+                <LayoutDashboard size={16} strokeWidth={2.5} />
+                <span className="text-[11px] font-mono tracking-[0.18em] uppercase">현황 요약</span>
+              </div>
+              <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
+            </div>
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              <button
+                onClick={handleExportAll}
+                disabled={loading || exporting}
+                className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40 shrink-0"
+              >
+                {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                {exporting
+                  ? exportProgress
+                    ? `사진 첨부 중... (${exportProgress.done}/${exportProgress.total})`
+                    : "내보내는 중..."
+                  : "전체 데이터 엑셀 내보내기(사진 포함)"}
+              </button>
+              {exportResult && (
+                <span className="text-[11px] font-mono text-[#7A8886]">{exportResult}</span>
+              )}
+            </div>
           </div>
-          <h1 className="text-[24px] leading-tight font-semibold tracking-tight font-display">대시보드</h1>
         </div>
       </header>
 
@@ -1552,14 +1905,6 @@ function DashboardScreen({ onBack, onOpenSite }) {
 /* Root                                                                */
 /* ------------------------------------------------------------------ */
 
-function BuildMarker() {
-  return (
-    <div className="fixed bottom-2 right-2 z-[999] text-[10px] font-mono text-[#B9C2C0] bg-white/70 px-1.5 py-0.5 rounded select-none pointer-events-none">
-      build v9
-    </div>
-  );
-}
-
 export default function App() {
   const [page, setPage] = useState({ name: "list" });
 
@@ -1608,9 +1953,8 @@ export default function App() {
   }
 
   return (
-    <>
+    <PinGate>
       {content}
-      <BuildMarker />
-    </>
+    </PinGate>
   );
 }
