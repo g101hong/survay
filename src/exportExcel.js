@@ -50,9 +50,16 @@ const MAX_EMBEDDED_PHOTOS = 300;
 /** 사진 URL 발급 API의 속도제한(분당 30회, 세션당) 보호를 위한 동시요청 제한 */
 const PHOTO_FETCH_CONCURRENCY = 4;
 
-const PHOTO_COL_WIDTH = 18;
-const PHOTO_ROW_HEIGHT = 70; // 포인트 단위
-const PHOTO_PX = { width: 110, height: 82 };
+// 조사이력 사진 표시 크기.
+// [v1 → v2] 요청에 따라 기존 대비 2배(110x82 → 220x164)로 확대하고,
+// 사진이 셀에 가려지거나 넘치지 않도록 열 너비/행 높이도 함께 키웠습니다.
+// (열 너비는 픽셀/≈7, 행 높이는 픽셀/≈1.333(96dpi 기준 포인트 환산) 근사치로 계산하고
+//  여백을 위해 여유를 조금 더 뒀습니다. 실제 이미지 파일 자체를 다시 인코딩해
+//  키우는 게 아니라 엑셀 안에서 "표시 크기"만 키우는 것이라 파일 용량에는
+//  영향이 없습니다.)
+const PHOTO_COL_WIDTH = 33; // ≈ 220px
+const PHOTO_ROW_HEIGHT = 130; // 포인트 단위, ≈ 164px
+const PHOTO_PX = { width: 220, height: 164 };
 
 const BRAND_COLOR = "FF2F6F62";
 
