@@ -19,8 +19,10 @@
 //    강제로 텍스트 처리합니다.
 // 2) 사진 첨부로 인한 속도제한(Rate Limit) 충돌
 //    사진 URL 발급용 Edge Function(get-photo-url)은 세션당 분당 30회 제한이
-//    있습니다. 사진이 많을 때 한꺼번에 요청하면 이 제한에 걸려 실패하므로,
-//    PHOTO_FETCH_CONCURRENCY로 동시 요청 수를 4개로 제한해 순차적으로 처리합니다.
+//    있습니다. 단순히 동시 요청 수만 제한해서는(예: 4개씩) 사진이 많을 때
+//    금방 이 한도를 넘겨버리므로, SlidingWindowLimiter로 "분당 24회"를
+//    넘지 않도록 실제 호출 속도 자체를 조절하고, 그래도 실패하면(순간적인
+//    경합 등) 잠시 대기 후 최대 3회까지 재시도합니다.
 // 3) 클라이언트 메모리/성능 보호
 //    수백 장을 한 번에 내려받아 삽입하면 브라우저가 느려질 수 있어
 //    MAX_EMBEDDED_PHOTOS(300장) 상한을 두고, 초과분은 "상한 초과로 미첨부"라는
@@ -47,8 +49,45 @@ const DANGEROUS_LEADING_CHARS = new Set(["=", "+", "-", "@", "\t", "\r"]);
 
 /** 조사이력 사진 첨부 상한 (성능 보호) */
 const MAX_EMBEDDED_PHOTOS = 300;
-/** 사진 URL 발급 API의 속도제한(분당 30회, 세션당) 보호를 위한 동시요청 제한 */
+/** 동시에 처리할 사진 개수 (아래 레이트리미터가 실제 처리량을 조절하므로, 이 값은
+ *  파이프라인 병렬성 정도의 의미만 가집니다) */
 const PHOTO_FETCH_CONCURRENCY = 4;
+
+// [추가] get-photo-url Edge Function은 세션당 "분당 30회"로 제한되어 있습니다.
+// 사진이 많은 상태에서 그냥 동시에 여러 개를 요청하면 곧바로 이 한도에 걸려
+// "rate_limited"로 실패하므로(429 Too Many Requests), 클라이언트에서도 스스로
+// 분당 요청 수를 서버 한도보다 낮게 유지하도록 슬라이딩 윈도우 방식으로 조절하고,
+// 그래도 실패하면 잠시 기다렸다가 재시도합니다.
+const PHOTO_RATE_LIMIT_PER_MINUTE = 24; // 서버 한도(30)보다 낮춰 안전 여유를 둠
+const RATE_WINDOW_MS = 60_000;
+const PHOTO_FETCH_MAX_RETRIES = 3;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 최근 windowMs 동안 maxPerWindow회를 넘지 않도록 호출을 지연시키는 레이트리미터. */
+class SlidingWindowLimiter {
+  constructor(maxPerWindow, windowMs) {
+    this.max = maxPerWindow;
+    this.windowMs = windowMs;
+    this.timestamps = [];
+  }
+
+  async acquire() {
+    for (;;) {
+      const now = Date.now();
+      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+      if (this.timestamps.length < this.max) {
+        this.timestamps.push(now);
+        return;
+      }
+      const oldest = this.timestamps[0];
+      const waitMs = this.windowMs - (now - oldest) + 100; // 약간의 여유
+      await sleep(waitMs);
+    }
+  }
+}
 
 // 조사이력 사진 표시 크기.
 // [v1 → v2] 요청에 따라 기존 대비 2배(110x82 → 220x164)로 확대하고,
@@ -143,6 +182,24 @@ async function fetchImageForEmbed(path) {
   } catch {
     return null;
   }
+}
+
+/**
+ * fetchImageForEmbed을 레이트리미터로 감싸고, 실패 시 잠시 기다렸다가 재시도합니다.
+ * (실패 원인 대부분이 get-photo-url의 분당 요청 제한이라, 대기 후 재시도하면
+ * 대체로 성공합니다. 세션 만료 등 영구적인 실패는 재시도해도 즉시 실패하므로
+ * 큰 시간 손실 없이 넘어갑니다.)
+ */
+async function fetchImageForEmbedWithRetry(path, limiter) {
+  for (let attempt = 0; attempt <= PHOTO_FETCH_MAX_RETRIES; attempt++) {
+    await limiter.acquire();
+    const image = await fetchImageForEmbed(path);
+    if (image) return image;
+    if (attempt < PHOTO_FETCH_MAX_RETRIES) {
+      await sleep(3000 * (attempt + 1)); // 3s, 6s, 9s ...
+    }
+  }
+  return null;
 }
 
 function styleHeader(ws) {
@@ -297,10 +354,11 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
 
   let done = 0;
   let failed = 0;
+  const limiter = new SlidingWindowLimiter(PHOTO_RATE_LIMIT_PER_MINUTE, RATE_WINDOW_MS);
 
   await mapWithConcurrency(toEmbed, PHOTO_FETCH_CONCURRENCY, async (rowIdx) => {
     const log = rows[rowIdx];
-    const image = await fetchImageForEmbed(log.survey_photo_path);
+    const image = await fetchImageForEmbedWithRetry(log.survey_photo_path, limiter);
     const excelRow = rowIdx + 2; // 1행은 헤더이므로 데이터는 2행부터 시작
 
     if (image) {
