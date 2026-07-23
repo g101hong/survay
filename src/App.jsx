@@ -19,6 +19,7 @@ import {
   Clock,
   Download,
   Pencil,
+  Archive,
 } from "lucide-react";
 import {
   fetchSites,
@@ -1714,6 +1715,35 @@ function DashboardScreen({ onBack, onOpenSite }) {
     }
   }
 
+  // 현재 등록된 현장조사 사진(AP별 최근 사진)을 전부 ZIP으로 묶어 다운로드합니다.
+  // 파일명 형식: {위치}_{AP번호}.jpg
+  const [zipping, setZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState(null);
+  const [zipResult, setZipResult] = useState(null);
+
+  async function handleDownloadPhotosZip() {
+    if (zipping) return;
+    setZipping(true);
+    setZipProgress(null);
+    setZipResult(null);
+    try {
+      const { downloadAllSurveyPhotosZip } = await import("./downloadPhotosZip");
+      const summary = await downloadAllSurveyPhotosZip({
+        sites,
+        apDetails: aps,
+        onProgress: (done, total) => setZipProgress({ done, total }),
+      });
+      const parts = [`사진 ${summary.zipped}/${summary.total}장 포함`];
+      if (summary.failed > 0) parts.push(`실패 ${summary.failed}장`);
+      if (summary.overCap > 0) parts.push(`상한 초과 ${summary.overCap}장 제외`);
+      setZipResult(parts.join(" · "));
+    } catch (err) {
+      setZipResult(`다운로드 실패: ${err.message ?? err}`);
+    } finally {
+      setZipping(false);
+    }
+  }
+
   return (
     <div className="min-h-full bg-[#F3F5F4] text-[#1C2B2C]">
       <ConfigWarningBanner />
@@ -1748,6 +1778,21 @@ function DashboardScreen({ onBack, onOpenSite }) {
               </button>
               {exportResult && (
                 <span className="text-[11px] font-mono text-[#7A8886]">{exportResult}</span>
+              )}
+              <button
+                onClick={handleDownloadPhotosZip}
+                disabled={loading || zipping}
+                className="inline-flex items-center gap-1.5 rounded-md border border-[#D8DEDC] bg-white px-3 py-2 text-[13px] font-medium text-[#4A5A5C] hover:border-[#2F6F62] hover:text-[#2F6F62] transition-colors disabled:opacity-40 shrink-0"
+              >
+                {zipping ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
+                {zipping
+                  ? zipProgress
+                    ? `사진 압축 중... (${zipProgress.done}/${zipProgress.total})`
+                    : "압축하는 중..."
+                  : "현장조사 사진 전체 다운로드(ZIP)"}
+              </button>
+              {zipResult && (
+                <span className="text-[11px] font-mono text-[#7A8886]">{zipResult}</span>
               )}
             </div>
           </div>

@@ -84,11 +84,14 @@ export async function fetchApDetailsBySite(siteId) {
 
 /**
  * 전체 AP 목록을 한 번에 가져옵니다 (목록/대시보드 화면에서 지점별 대수·상태 요약,
- * 그리고 엑셀 내보내기의 AP세부사항 시트에 사용).
+ * 엑셀 내보내기의 AP세부사항 시트, 그리고 "사진 전체 ZIP 다운로드" 기능에 사용).
  *
- * ⚠️ photo_path/survey_photo_path(Storage 내부 경로)는 의도적으로 select하지 않습니다.
- *    화면 요약이나 엑셀 내보내기 어디에도 내부 파일 키를 노출할 이유가 없고,
- *    사진이 필요한 화면(DetailScreen)은 fetchApDetailsBySite로 별도 조회합니다.
+ * ⚠️ photo_path(설치 당시 사진 경로)는 여전히 select하지 않습니다 — 화면/내보내기
+ *    어디에도 필요하지 않기 때문입니다. survey_photo_path(최근 조사 사진 경로)는
+ *    ZIP 다운로드 기능에서 실제로 필요해 포함하되, 화면에는 직접 노출하지 않고
+ *    downloadPhotosZip.js가 resolvePhotoUrl()로 서명 URL을 받아 파일을
+ *    내려받는 용도로만 사용합니다. (사진이 필요한 화면(DetailScreen)은
+ *    fetchApDetailsBySite로 별도 조회합니다.)
  */
 export async function fetchAllApDetails() {
   requireSupabase();
@@ -96,7 +99,7 @@ export async function fetchAllApDetails() {
   const { data, error } = await supabase
     .from("ap_detail")
     .select(
-      "id, site_id, ap_no, in_out, install_point, device_status, network_status, survey_date, remark, download_mbps, latency_ms, measurement_method, wifi_confirmed"
+      "id, site_id, ap_no, in_out, install_point, device_status, network_status, survey_date, remark, download_mbps, latency_ms, measurement_method, wifi_confirmed, survey_photo_path"
     );
 
   if (error) throw error;

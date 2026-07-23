@@ -10,84 +10,41 @@
 //
 // 설치: npm install exceljs   (기존 xlsx 패키지는 더 이상 사용하지 않으므로 제거해도 됩니다)
 //
+// 사진을 서버에서 받아오는 공통 로직(속도제한/재시도/파일명 정제 등)은
+// photoFetchShared.js로 분리되어 downloadPhotosZip.js(사진 전체 ZIP 다운로드)와
+// 함께 공유합니다. 관련 웹취약점 검토 내용도 그 파일 상단에 정리되어 있습니다.
+//
 // ------------------------------------------------------------------
-// 웹취약점 검토
+// 웹취약점 검토 (이 파일에서 추가로 다루는 부분)
 // ------------------------------------------------------------------
 // 1) CSV/Excel 수식 인젝션(Formula Injection, OWASP 등재 취약점)
 //    비고 등 자유 입력 텍스트가 =, +, -, @ 로 시작하면 스프레드시트 프로그램이
 //    수식으로 해석할 위험이 있어 sanitizeCell()에서 앞에 작은따옴표를 붙여
 //    강제로 텍스트 처리합니다.
-// 2) 사진 첨부로 인한 속도제한(Rate Limit) 충돌
-//    사진 URL 발급용 Edge Function(get-photo-url)은 세션당 분당 30회 제한이
-//    있습니다. 단순히 동시 요청 수만 제한해서는(예: 4개씩) 사진이 많을 때
-//    금방 이 한도를 넘겨버리므로, SlidingWindowLimiter로 "분당 24회"를
-//    넘지 않도록 실제 호출 속도 자체를 조절하고, 그래도 실패하면(순간적인
-//    경합 등) 잠시 대기 후 최대 3회까지 재시도합니다.
-// 3) 클라이언트 메모리/성능 보호
+// 2) 클라이언트 메모리/성능 보호
 //    수백 장을 한 번에 내려받아 삽입하면 브라우저가 느려질 수 있어
 //    MAX_EMBEDDED_PHOTOS(300장) 상한을 두고, 초과분은 "상한 초과로 미첨부"라는
 //    안내 문구만 표시합니다.
-// 4) 위장 파일 방어
-//    fetch 응답의 Content-Type이 image/*가 아니면(예: 서명 URL 만료로 오류
-//    JSON이 대신 온 경우 등) 방어적으로 첨부를 건너뜁니다. 업로드 시점에 이미
-//    매직바이트로 실제 이미지 형식을 검증하고 있어(upload-survey-photo 함수),
-//    이 단계는 추가 방어선입니다.
-// 5) SSRF
-//    이미지 URL은 사용자가 직접 지정하는 것이 아니라, 서버(Edge Function)가
-//    버킷명을 화이트리스트로 검증해 발급한 서명 URL만 사용하므로 임의 URL을
-//    요청할 위험이 없습니다.
-// 6) 파일명 인젝션 / OS 비호환 문자
-//    파일명에 쓸 수 없는 문자(\ / : * ? " < > |)는 sanitizeFileNamePart()에서
-//    제거합니다.
+// (속도제한/위장파일방어/SSRF/파일명 정제는 photoFetchShared.js 참고)
 // ------------------------------------------------------------------
 
 import ExcelJS from "exceljs";
-import { resolvePhotoUrl } from "./api";
+import {
+  PHOTO_FETCH_CONCURRENCY,
+  PHOTO_RATE_LIMIT_PER_MINUTE,
+  RATE_WINDOW_MS,
+  SlidingWindowLimiter,
+  mapWithConcurrency,
+  sanitizeFileNamePart,
+  todayStamp,
+  fetchSurveyPhotoWithRetry,
+} from "./photoFetchShared";
 
 /** 수식으로 해석될 수 있는 선행 문자 (OWASP CSV Injection 대응 목록) */
 const DANGEROUS_LEADING_CHARS = new Set(["=", "+", "-", "@", "\t", "\r"]);
 
 /** 조사이력 사진 첨부 상한 (성능 보호) */
 const MAX_EMBEDDED_PHOTOS = 300;
-/** 동시에 처리할 사진 개수 (아래 레이트리미터가 실제 처리량을 조절하므로, 이 값은
- *  파이프라인 병렬성 정도의 의미만 가집니다) */
-const PHOTO_FETCH_CONCURRENCY = 4;
-
-// [추가] get-photo-url Edge Function은 세션당 "분당 30회"로 제한되어 있습니다.
-// 사진이 많은 상태에서 그냥 동시에 여러 개를 요청하면 곧바로 이 한도에 걸려
-// "rate_limited"로 실패하므로(429 Too Many Requests), 클라이언트에서도 스스로
-// 분당 요청 수를 서버 한도보다 낮게 유지하도록 슬라이딩 윈도우 방식으로 조절하고,
-// 그래도 실패하면 잠시 기다렸다가 재시도합니다.
-const PHOTO_RATE_LIMIT_PER_MINUTE = 24; // 서버 한도(30)보다 낮춰 안전 여유를 둠
-const RATE_WINDOW_MS = 60_000;
-const PHOTO_FETCH_MAX_RETRIES = 3;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** 최근 windowMs 동안 maxPerWindow회를 넘지 않도록 호출을 지연시키는 레이트리미터. */
-class SlidingWindowLimiter {
-  constructor(maxPerWindow, windowMs) {
-    this.max = maxPerWindow;
-    this.windowMs = windowMs;
-    this.timestamps = [];
-  }
-
-  async acquire() {
-    for (;;) {
-      const now = Date.now();
-      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
-      if (this.timestamps.length < this.max) {
-        this.timestamps.push(now);
-        return;
-      }
-      const oldest = this.timestamps[0];
-      const waitMs = this.windowMs - (now - oldest) + 100; // 약간의 여유
-      await sleep(waitMs);
-    }
-  }
-}
 
 // 조사이력 사진 표시 크기.
 // [v1 → v2] 요청에 따라 기존 대비 2배(110x82 → 220x164)로 확대하고,
@@ -117,21 +74,6 @@ function sanitizeCell(value) {
   return str;
 }
 
-/** 파일명에 쓸 수 없는 문자를 제거/치환합니다. */
-function sanitizeFileNamePart(str) {
-  return String(str)
-    .replace(/[\\/:*?"<>|]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
-}
-
-function todayStamp() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
-}
-
 /** 위/경도가 유효한 좌표 범위인지 확인합니다 (App.jsx의 isValidCoord와 동일 기준). */
 function isValidCoord(lat, lng) {
   return (
@@ -144,62 +86,6 @@ function isValidCoord(lat, lng) {
     lng >= -180 &&
     lng <= 180
   );
-}
-
-/** 동시 실행 개수를 제한하며 배열의 각 항목에 비동기 작업을 수행합니다. */
-async function mapWithConcurrency(items, limit, worker) {
-  let cursor = 0;
-  async function run() {
-    while (cursor < items.length) {
-      const i = cursor++;
-      await worker(items[i], i);
-    }
-  }
-  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run);
-  await Promise.all(runners);
-}
-
-/**
- * survey_photo_path를 실제 이미지 바이너리로 변환합니다.
- * - resolvePhotoUrl로 짧은 서명 URL(5분 유효)을 받아온 뒤, 그 URL에서 즉시 fetch합니다.
- * - Content-Type이 image/*가 아니면 방어적으로 버립니다.
- */
-async function fetchImageForEmbed(path) {
-  if (!path) return null;
-  try {
-    const url = await resolvePhotoUrl("ap-survey-photos", path);
-    if (!url) return null;
-
-    const res = await fetch(url);
-    if (!res.ok) return null;
-
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) return null;
-
-    const buffer = await res.arrayBuffer();
-    const extension = contentType.includes("png") ? "png" : "jpeg";
-    return { buffer, extension };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * fetchImageForEmbed을 레이트리미터로 감싸고, 실패 시 잠시 기다렸다가 재시도합니다.
- * (실패 원인 대부분이 get-photo-url의 분당 요청 제한이라, 대기 후 재시도하면
- * 대체로 성공합니다. 세션 만료 등 영구적인 실패는 재시도해도 즉시 실패하므로
- * 큰 시간 손실 없이 넘어갑니다.)
- */
-async function fetchImageForEmbedWithRetry(path, limiter) {
-  for (let attempt = 0; attempt <= PHOTO_FETCH_MAX_RETRIES; attempt++) {
-    await limiter.acquire();
-    const image = await fetchImageForEmbed(path);
-    if (image) return image;
-    if (attempt < PHOTO_FETCH_MAX_RETRIES) {
-      await sleep(3000 * (attempt + 1)); // 3s, 6s, 9s ...
-    }
-  }
-  return null;
 }
 
 function styleHeader(ws) {
@@ -358,7 +244,7 @@ async function addSurveyLogSheetWithPhotos(workbook, logs, apDetails, sites, onP
 
   await mapWithConcurrency(toEmbed, PHOTO_FETCH_CONCURRENCY, async (rowIdx) => {
     const log = rows[rowIdx];
-    const image = await fetchImageForEmbedWithRetry(log.survey_photo_path, limiter);
+    const image = await fetchSurveyPhotoWithRetry(log.survey_photo_path, limiter);
     const excelRow = rowIdx + 2; // 1행은 헤더이므로 데이터는 2행부터 시작
 
     if (image) {
